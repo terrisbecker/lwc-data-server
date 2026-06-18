@@ -18,6 +18,18 @@ so DB internals never reach clients. PMN is the reference implementation
 Note: `tsconfig` targets ES2020, which predates the `Error` `{ cause }`
 constructor option — service errors assign `cause` manually as a property.
 
+Security middleware chain (`src/index.ts`):
+`helmet` → `cors` (allowlist from `CORS_ALLOWED_ORIGINS`) → `rateLimiter` →
+`apiKeyAuth` → feature routers → `errorHandler` (last). The rate limiter and API
+key guard are mounted on `/api`, with the limiter **before** auth so
+unauthenticated floods are also capped. `GET /health` is registered before `/api`
+and is intentionally **public** (no auth, no rate limit) for load-balancer
+probes. `apiKeyAuth` (`src/middleware/api.key.ts`) requires an `x-api-key` header
+matching `API_KEY` via a constant-time compare and **fails closed**: the process
+throws at startup if `API_KEY` is unset. `trust proxy` is driven by `TRUST_PROXY`
+(default 0) so the limiter keys on the real client IP without trusting spoofable
+`X-Forwarded-For`.
+
 Env: `src/index.ts` loads env via `import "dotenv/config";` as its **first**
 line, before the import chain reaches `src/db.ts` (which reads
 `process.env.DATABASE_URL` at module init). If `DATABASE_URL` is unset the pg
