@@ -5,6 +5,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  schemas  = ["public", "watershed_field_data"]
 }
 
 model camas_city_data {
@@ -23,6 +24,8 @@ model camas_city_data {
   chl_a_rfu  Decimal?  @db.Decimal
   phyc_rfu   Decimal?  @db.Decimal
   turbidity  Decimal?  @db.Decimal
+
+  @@schema("public")
 }
 
 model pmn_combined_field_data {
@@ -50,6 +53,8 @@ model pmn_combined_field_data {
   general_comments       String?
   secchi                 Decimal?  @db.Decimal
   source                 String?
+
+  @@schema("public")
 }
 
 model pmn_field_data {
@@ -76,6 +81,8 @@ model pmn_field_data {
   general_comments       String?
   secchi                 Decimal?  @db.Decimal
   id_uuid                String    @id(map: "pmn_field_data_pkey1") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  @@schema("public")
 }
 
 model pmn_volunteer_input {
@@ -105,4 +112,34 @@ model pmn_volunteer_input {
   general_comments       String?
   created_at             DateTime? @default(now()) @db.Timestamp(6)
   id_uuid                String?   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  @@schema("public")
+}
+
+model locations {
+  loc_id         Int              @id @default(autoincrement())
+  loc_name       String
+  latitude       Float
+  longitude      Float
+  description    String?
+  phosphate_data phosphate_data[]
+
+  @@schema("watershed_field_data")
+}
+
+model phosphate_data {
+  id                   Int       @id @default(autoincrement())
+  lab_id               Int
+  lab_case_file_number Int
+  loc_id               Int
+  measurement_date     DateTime  @db.Date
+  measurement_time     DateTime  @db.Time(6)
+  analysis_date        DateTime  @db.Date
+  analyte_id           String    @db.VarChar(50)
+  analyte_level        Float
+  unit                 String    @db.VarChar(50)
+  notes                String?
+  locations            locations @relation(fields: [loc_id], references: [loc_id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("watershed_field_data")
 }
