@@ -4,22 +4,28 @@
   "description": "server only for lwc data and lwc api endpoints",
   "license": "MIT",
   "author": "Terris Becker",
-  "type": "module",
   "main": "index.js",
+  "private": true,
   "scripts": {
     "test": "test",
     "dev": "nodemon",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/src/index.js"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.3",
+    "@types/pg": "^8.20.0",
     "nodemon": "^3.1.14",
+    "prisma": "^7.8.0",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "express": "^5.2.1"
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.21.0"
   }
 }
