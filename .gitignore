@@ -18,3 +18,6 @@ dist/
 # os / editor
 **/.DS_Store
 .idea/
+
+# local claude notes
+.claude/

@@ -7,3 +7,4 @@ import type { pmn_combined_field_data } from "../../generated/prisma/client";
 export async function getAllCombinedFieldData(): Promise<pmn_combined_field_data[]> {
   return prisma.pmn_combined_field_data.findMany();
 }
+
