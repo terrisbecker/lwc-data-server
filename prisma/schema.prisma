@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model camas_city_data {
+  id         Int       @id @default(autoincrement())
+  location   String?   @db.VarChar(255)
+  date       DateTime? @db.Date
+  time       DateTime? @db.Time(6)
+  depth      Decimal?  @db.Decimal
+  temp_c     Decimal?  @db.Decimal
+  do_percent Decimal?  @db.Decimal
+  do_mg_l    Decimal?  @db.Decimal
+  spc_us_cm  Decimal?  @db.Decimal
+  c_us_cm    Decimal?  @db.Decimal
+  tds_mg_l   Decimal?  @db.Decimal
+  ph         Decimal?  @db.Decimal
+  chl_a_rfu  Decimal?  @db.Decimal
+  phyc_rfu   Decimal?  @db.Decimal
+  turbidity  Decimal?  @db.Decimal
+}
+
+model pmn_combined_field_data {
+  id                     String    @id
+  sample_date            DateTime? @db.Date
+  sample_time            DateTime? @db.Time(6)
+  sampling_site          String?
+  air_temperature        Decimal?  @db.Decimal
+  weather                String?
+  wind_direction         String?
+  wind_speed             String?
+  barometeric_pressure   Decimal?  @db.Decimal
+  water_temperature      Decimal?  @db.Decimal
+  ph                     Decimal?  @db.Decimal
+  dissolved_oxygen       Decimal?  @db.Decimal
+  conductivity           Decimal?  @db.Decimal
+  total_dissolved_solids Decimal?  @db.Decimal
+  salt_ppt               Decimal?  @db.Decimal
+  aphanizomenon          String?
+  dolichospermum         String?
+  microcystis            String?
+  planktothrix           String?
+  raphidiopsis           String?
+  woronichinia           String?
+  general_comments       String?
+  secchi                 Decimal?  @db.Decimal
+  source                 String?
+}
+
+model pmn_field_data {
+  sample_date            DateTime  @db.Date
+  sample_time            DateTime? @db.Time(6)
+  sampling_site          String
+  air_temperature        Decimal?  @db.Decimal
+  weather                String?
+  wind_direction         String?
+  wind_speed             String?
+  barometeric_pressure   Decimal?  @db.Decimal
+  water_temperature      Decimal?  @db.Decimal
+  ph                     Decimal?  @db.Decimal
+  dissolved_oxygen       Decimal?  @db.Decimal
+  conductivity           Decimal?  @db.Decimal
+  total_dissolved_solids Decimal?  @db.Decimal
+  salt_ppt               Decimal?  @db.Decimal
+  aphanizomenon          String?
+  dolichospermum         String?
+  microcystis            String?
+  planktothrix           String?
+  raphidiopsis           String?
+  woronichinia           String?
+  general_comments       String?
+  secchi                 Decimal?  @db.Decimal
+  id_uuid                String    @id(map: "pmn_field_data_pkey1") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+}
+
+model pmn_volunteer_input {
+  id                     Int       @id @default(autoincrement())
+  sample_date            DateTime? @db.Date
+  sample_time            DateTime? @db.Time(6)
+  sampling_site          String?
+  verification_code      String?
+  air_temp               Decimal?  @db.Decimal
+  weather                String?
+  wind_direction         String?
+  wind_speed             String?
+  baro_pressure          Decimal?  @db.Decimal
+  water_temp             Decimal?  @db.Decimal
+  ph                     Decimal?  @db.Decimal
+  dissolved_oxygen       Decimal?  @db.Decimal
+  conductivity           Decimal?  @db.Decimal
+  total_dissolved_solids Decimal?  @db.Decimal
+  salt                   Decimal?  @db.Decimal
+  secchi                 Decimal?  @db.Decimal
+  aphanizomenon          String?
+  dolichospermum         String?
+  microcystis            String?
+  planktothrix           String?
+  raphidiopsis           String?
+  woronichinia           String?
+  general_comments       String?
+  created_at             DateTime? @default(now()) @db.Timestamp(6)
+  id_uuid                String?   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+}
