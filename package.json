@@ -1,0 +1,22 @@
+{
+  "name": "lwc-data-server",
+  "version": "1.0.0",
+  "description": "server only for lwc data and lwc api endpoints",
+  "license": "MIT",
+  "author": "Terris Becker",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "test",
+    "dev": "nodemon",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.3",
+    "nodemon": "^3.1.14",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  }
+}
