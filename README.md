@@ -313,8 +313,11 @@ tsconfig.json               TS config (target ES2020, CommonJS)
 ### Prerequisites
 
 - Node.js (with npm) — `@types/node` targets Node 25.
-- Network access to the PostgreSQL/RDS database (a `DATABASE_URL` connection
-  string).
+- A PostgreSQL database. Either:
+  - **Local Docker** — Docker + Docker Compose (see
+    [Local development with Docker](#local-development-with-docker) below), or
+  - Network access to a remote PostgreSQL/RDS database (a `DATABASE_URL`
+    connection string).
 
 ### Setup
 
@@ -333,6 +336,7 @@ Then edit `.env`. You must set at minimum `DATABASE_URL` and `API_KEY`:
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | **yes** | — | Postgres connection string. If unset, the pg adapter silently falls back to `localhost:5432` and queries fail with `ECONNREFUSED`. |
+| `DATABASE_SSL` | no | _(SSL on)_ | Set to `false` to disable SSL/TLS on the DB connection. Required for a plain local Postgres (e.g. the Docker container); leave unset for AWS RDS, which requires SSL. |
 | `API_KEY` | **yes** | — | Shared secret for the `x-api-key` header. **Server refuses to start if unset.** |
 | `PORT` | no | `3000` | HTTP port. |
 | `CORS_ALLOWED_ORIGINS` | no | _(empty = deny all cross-origin)_ | Comma-separated origin allowlist, e.g. `http://localhost:5173`. |
@@ -345,6 +349,41 @@ Generate a strong API key with:
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
+
+### Local development with Docker
+
+`docker-compose.yml` provides a disposable local Postgres. The app still runs on
+the host (`npm run dev`); only the database is containerized.
+
+```bash
+docker compose up -d        # start Postgres in the background
+```
+
+Point `.env` at the container (no SSL — the local Postgres has no TLS):
+
+```
+DATABASE_URL=postgresql://lwc:lwc@localhost:5432/lwc_data
+DATABASE_SSL=false
+```
+
+Apply the schema to the fresh database (creates the `public` and
+`watershed_field_data` schemas + tables from the baseline migration):
+
+```bash
+npx prisma generate         # if not already done
+npx prisma migrate deploy
+```
+
+Then run the app as usual (`npm run dev`). Managing the container:
+
+```bash
+docker compose ps           # check health
+docker compose down         # stop (keeps data in the named volume)
+docker compose down -v      # stop and wipe the database
+```
+
+The tables start empty, so endpoints return `{ "data": [] }` until you load
+data — this still confirms end-to-end connectivity to the local DB.
 
 ### Run
 

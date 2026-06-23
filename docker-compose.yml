@@ -1,0 +1,31 @@
+# Local development Postgres. The app itself runs on the host (`npm run dev`);
+# this container only provides a disposable database.
+#
+#   docker compose up -d        start Postgres in the background
+#   docker compose down         stop (keeps data in the named volume)
+#   docker compose down -v      stop and wipe the database
+#
+# After first start, apply the schema with: npx prisma migrate deploy
+# (using DATABASE_URL=postgresql://lwc:lwc@localhost:5432/lwc_data, DATABASE_SSL=false)
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: lwc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lwc
+      POSTGRES_PASSWORD: lwc
+      POSTGRES_DB: lwc_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - lwc-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lwc -d lwc_data"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  lwc-pgdata:
