@@ -5,31 +5,12 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  schemas  = ["public", "watershed_field_data"]
+  schemas  = ["camas", "pmn", "users", "watershed_field_data"]
 }
 
-model camas_city_data {
-  id         Int       @id @default(autoincrement())
-  location   String?   @db.VarChar(255)
-  date       DateTime? @db.Date
-  time       DateTime? @db.Time(6)
-  depth      Decimal?  @db.Decimal
-  temp_c     Decimal?  @db.Decimal
-  do_percent Decimal?  @db.Decimal
-  do_mg_l    Decimal?  @db.Decimal
-  spc_us_cm  Decimal?  @db.Decimal
-  c_us_cm    Decimal?  @db.Decimal
-  tds_mg_l   Decimal?  @db.Decimal
-  ph         Decimal?  @db.Decimal
-  chl_a_rfu  Decimal?  @db.Decimal
-  phyc_rfu   Decimal?  @db.Decimal
-  turbidity  Decimal?  @db.Decimal
-
-  @@schema("public")
-}
-
+// ---------- pmn ----------
 model pmn_combined_field_data {
-  id                     String    @id
+  id                     String    @id @default(uuid()) @db.Uuid
   sample_date            DateTime? @db.Date
   sample_time            DateTime? @db.Time(6)
   sampling_site          String?
@@ -54,70 +35,33 @@ model pmn_combined_field_data {
   secchi                 Decimal?  @db.Decimal
   source                 String?
 
-  @@schema("public")
+  @@schema("pmn")
 }
 
-model pmn_field_data {
-  sample_date            DateTime  @db.Date
-  sample_time            DateTime? @db.Time(6)
-  sampling_site          String
-  air_temperature        Decimal?  @db.Decimal
-  weather                String?
-  wind_direction         String?
-  wind_speed             String?
-  barometeric_pressure   Decimal?  @db.Decimal
-  water_temperature      Decimal?  @db.Decimal
-  ph                     Decimal?  @db.Decimal
-  dissolved_oxygen       Decimal?  @db.Decimal
-  conductivity           Decimal?  @db.Decimal
-  total_dissolved_solids Decimal?  @db.Decimal
-  salt_ppt               Decimal?  @db.Decimal
-  aphanizomenon          String?
-  dolichospermum         String?
-  microcystis            String?
-  planktothrix           String?
-  raphidiopsis           String?
-  woronichinia           String?
-  general_comments       String?
-  secchi                 Decimal?  @db.Decimal
-  id_uuid                String    @id(map: "pmn_field_data_pkey1") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+// ---------- camas ----------
+model camas_city_data {
+  id         String    @id @default(uuid()) @db.Uuid
+  location   String?   @db.VarChar(255)
+  date       DateTime? @db.Date
+  time       DateTime? @db.Time(6)
+  depth      Decimal?  @db.Decimal
+  temp_c     Decimal?  @db.Decimal
+  do_percent Decimal?  @db.Decimal
+  do_mg_l    Decimal?  @db.Decimal
+  spc_us_cm  Decimal?  @db.Decimal
+  c_us_cm    Decimal?  @db.Decimal
+  tds_mg_l   Decimal?  @db.Decimal
+  ph         Decimal?  @db.Decimal
+  chl_a_rfu  Decimal?  @db.Decimal
+  phyc_rfu   Decimal?  @db.Decimal
+  turbidity  Decimal?  @db.Decimal
 
-  @@schema("public")
+  @@schema("camas")
 }
 
-model pmn_volunteer_input {
-  id                     Int       @id @default(autoincrement())
-  sample_date            DateTime? @db.Date
-  sample_time            DateTime? @db.Time(6)
-  sampling_site          String?
-  verification_code      String?
-  air_temp               Decimal?  @db.Decimal
-  weather                String?
-  wind_direction         String?
-  wind_speed             String?
-  baro_pressure          Decimal?  @db.Decimal
-  water_temp             Decimal?  @db.Decimal
-  ph                     Decimal?  @db.Decimal
-  dissolved_oxygen       Decimal?  @db.Decimal
-  conductivity           Decimal?  @db.Decimal
-  total_dissolved_solids Decimal?  @db.Decimal
-  salt                   Decimal?  @db.Decimal
-  secchi                 Decimal?  @db.Decimal
-  aphanizomenon          String?
-  dolichospermum         String?
-  microcystis            String?
-  planktothrix           String?
-  raphidiopsis           String?
-  woronichinia           String?
-  general_comments       String?
-  created_at             DateTime? @default(now()) @db.Timestamp(6)
-  id_uuid                String?   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-
-  @@schema("public")
-}
-
+// ---------- watershed_field_data ----------
 model locations {
-  loc_id         Int              @id @default(autoincrement())
+  loc_id         String           @id @default(uuid()) @db.Uuid
   loc_name       String
   latitude       Float
   longitude      Float
@@ -128,10 +72,10 @@ model locations {
 }
 
 model phosphate_data {
-  id                   Int       @id @default(autoincrement())
+  id                   String    @id @default(uuid()) @db.Uuid
   lab_id               Int
   lab_case_file_number Int
-  loc_id               Int
+  loc_id               String    @db.Uuid
   measurement_date     DateTime  @db.Date
   measurement_time     DateTime  @db.Time(6)
   analysis_date        DateTime  @db.Date
@@ -142,4 +86,58 @@ model phosphate_data {
   locations            locations @relation(fields: [loc_id], references: [loc_id], onDelete: NoAction, onUpdate: NoAction)
 
   @@schema("watershed_field_data")
+}
+
+// ---------- users (RBAC) ----------
+model users {
+  id            String       @id @default(uuid()) @db.Uuid
+  email         String       @unique
+  password_hash String
+  name          String?
+  is_active     Boolean      @default(true)
+  created_at    DateTime     @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime     @updatedAt @db.Timestamptz(6)
+  user_roles    user_roles[]
+
+  @@schema("users")
+}
+
+model roles {
+  id               String             @id @default(uuid()) @db.Uuid
+  name             String             @unique
+  description      String?
+  user_roles       user_roles[]
+  role_permissions role_permissions[]
+
+  @@schema("users")
+}
+
+model permissions {
+  id               String             @id @default(uuid()) @db.Uuid
+  name             String             @unique
+  description      String?
+  role_permissions role_permissions[]
+
+  @@schema("users")
+}
+
+model user_roles {
+  user_id     String   @db.Uuid
+  role_id     String   @db.Uuid
+  assigned_at DateTime @default(now()) @db.Timestamptz(6)
+  users       users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  roles       roles    @relation(fields: [role_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, role_id])
+  @@schema("users")
+}
+
+model role_permissions {
+  role_id       String      @db.Uuid
+  permission_id String      @db.Uuid
+  roles         roles       @relation(fields: [role_id], references: [id], onDelete: Cascade)
+  permissions   permissions @relation(fields: [permission_id], references: [id], onDelete: Cascade)
+
+  @@id([role_id, permission_id])
+  @@schema("users")
 }
