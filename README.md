@@ -134,14 +134,23 @@ render them as text rather than assuming a controlled vocabulary.
 
 ## Database schema
 
-The database is **introspected, not authored, by this repo** — Prisma's schema
-was generated from an existing RDS database. There are two Postgres schemas:
-`public` (PMN + Camas city data) and `watershed_field_data` (locations +
-phosphate lab data).
+Prisma's schema was originally introspected from an existing RDS database, then
+**restructured for the local Docker environment** (see `prisma/schema.prisma`).
+There are four Postgres schemas:
+
+- `pmn` — `pmn_combined_field_data` (the served table).
+- `camas` — `camas_city_data` (Camas city water readings).
+- `watershed_field_data` — `locations` + `phosphate_data` (lab data).
+- `users` — a classic RBAC setup: `users`, `roles`, `permissions`, and the
+  `user_roles` / `role_permissions` join tables.
+
+All primary keys are UUIDs (`@db.Uuid`), except `pmn_combined_field_data.id`,
+which keeps its source-data business key (a plain string).
 
 > **Only `pmn_combined_field_data` is exposed via the API today.** The other
 > tables exist in the database and in the Prisma schema (so models/types are
-> generated for them) but have no endpoints yet. They are documented here so
+> generated for them) but have no endpoints yet. The `users` RBAC tables are
+> schema-only — no auth code is wired into them yet. They are documented here so
 > front-end/agent work can anticipate future endpoints.
 
 ### `pmn_combined_field_data` (the served table)
@@ -180,26 +189,9 @@ returns.
 ### Other tables (not yet exposed)
 
 <details>
-<summary><code>pmn_field_data</code> — raw staff field samples (schema: public)</summary>
+<summary><code>camas_city_data</code> — Camas city water readings (schema: camas)</summary>
 
-Same measurement columns as the combined table, keyed by `id_uuid` (UUID PK,
-DB-generated). `sample_date` and `sampling_site` are required. No `source`
-column.
-</details>
-
-<details>
-<summary><code>pmn_volunteer_input</code> — raw volunteer submissions (schema: public)</summary>
-
-Integer PK `id`. Note the **column names differ** from the combined table:
-`air_temp`, `baro_pressure`, `water_temp`, `salt` (vs. `air_temperature`,
-`barometeric_pressure`, `water_temperature`, `salt_ppt`). Adds
-`verification_code` and `created_at` (timestamp). Also has a nullable `id_uuid`.
-</details>
-
-<details>
-<summary><code>camas_city_data</code> — Camas city water readings (schema: public)</summary>
-
-Integer PK `id`. Columns: `location`, `date`, `time`, `depth`, `temp_c`,
+UUID PK `id`. Columns: `location`, `date`, `time`, `depth`, `temp_c`,
 `do_percent`, `do_mg_l`, `spc_us_cm`, `c_us_cm`, `tds_mg_l`, `ph`, `chl_a_rfu`,
 `phyc_rfu`, `turbidity` (all decimal except location/date/time).
 </details>
@@ -207,7 +199,7 @@ Integer PK `id`. Columns: `location`, `date`, `time`, `depth`, `temp_c`,
 <details>
 <summary><code>watershed_field_data.locations</code> — sampling sites (schema: watershed_field_data)</summary>
 
-`loc_id` (int PK), `loc_name`, `latitude`, `longitude` (floats), `description`.
+`loc_id` (UUID PK), `loc_name`, `latitude`, `longitude` (floats), `description`.
 Has a one-to-many relation to `phosphate_data`. Useful for mapping if/when
 exposed.
 </details>
@@ -215,9 +207,26 @@ exposed.
 <details>
 <summary><code>watershed_field_data.phosphate_data</code> — lab phosphate results (schema: watershed_field_data)</summary>
 
-`id` (int PK), `lab_id`, `lab_case_file_number`, `loc_id` (FK → `locations`),
-`measurement_date`, `measurement_time`, `analysis_date`, `analyte_id`,
-`analyte_level` (float), `unit`, `notes`.
+`id` (UUID PK), `lab_id`, `lab_case_file_number`, `loc_id` (UUID FK →
+`locations`), `measurement_date`, `measurement_time`, `analysis_date`,
+`analyte_id`, `analyte_level` (float), `unit`, `notes`.
+</details>
+
+<details>
+<summary><code>users</code> — RBAC (schema: users)</summary>
+
+A classic user/role/permission model. All UUID PKs.
+
+- `users` — `id`, `email` (unique), `password_hash`, `name`, `is_active`,
+  `created_at`, `updated_at`.
+- `roles` — `id`, `name` (unique), `description`.
+- `permissions` — `id`, `name` (unique), `description`.
+- `user_roles` — join table (`user_id`, `role_id` composite PK, `assigned_at`),
+  FKs cascade.
+- `role_permissions` — join table (`role_id`, `permission_id` composite PK),
+  FKs cascade.
+
+Schema-only for now — no auth code (login, hashing, role checks) is wired in yet.
 </details>
 
 ### Field types & gotchas
@@ -295,7 +304,7 @@ src/
     pmn.controller.ts       handleGetCombinedFieldData()
     pmn.routes.ts           pmnRouter → GET /combined-field-data
 prisma/
-  schema.prisma             introspected DB models (2 schemas)
+  schema.prisma             DB models (4 schemas: pmn, camas, watershed_field_data, users)
   migrations/0_init/        baseline migration SQL
 generated/prisma/           Prisma client output (gitignored, generated)
 scripts/
@@ -366,8 +375,9 @@ DATABASE_URL=postgresql://lwc:lwc@localhost:5432/lwc_data
 DATABASE_SSL=false
 ```
 
-Apply the schema to the fresh database (creates the `public` and
-`watershed_field_data` schemas + tables from the baseline migration):
+Apply the schema to the fresh database (creates the `pmn`, `camas`,
+`watershed_field_data`, and `users` schemas + tables from the baseline
+migration):
 
 ```bash
 npx prisma generate         # if not already done
@@ -433,7 +443,8 @@ Copy the `src/pmn/` feature as a template:
 
 - **Runtime/framework:** Node.js, Express 5, TypeScript (CommonJS, ES2020 target).
 - **Data:** Prisma 7 with the `@prisma/adapter-pg` driver adapter over `pg`,
-  against PostgreSQL on AWS RDS.
+  against PostgreSQL (local Docker for development; AWS RDS-compatible for
+  deployment).
 - **Security:** `helmet`, `cors`, `express-rate-limit`, custom constant-time API
   key auth.
 - **Dev:** `nodemon` + `ts-node`.
@@ -450,8 +461,8 @@ server cert. Read that note before touching DB SSL/connection config.
 ## Roadmap / known gaps
 
 - **Read-only, single endpoint.** Only `pmn_combined_field_data` is exposed.
-  Camas, volunteer, raw field, locations, and phosphate tables are modeled but
-  not served.
+  Camas, locations, and phosphate tables are modeled but not served; the `users`
+  RBAC tables exist in the schema but have no auth wired in yet.
 - **No pagination, filtering, or sorting** — the PMN endpoint returns the whole
   table every call. Front-ends should expect to fetch once and filter/sort
   client-side for now.
