@@ -39,6 +39,9 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
+// Parse JSON request bodies for POST/PATCH endpoints.
+app.use(express.json());
+
 // API chain: rate limiter runs before auth so unauthenticated floods are capped.
 app.use("/api", rateLimiter, apiKeyAuth);
 app.use("/api/pmn", pmnRouter);
