@@ -3,8 +3,10 @@ import express, { type Request, type Response } from "express";
 import helmet from "helmet";
 import cors from "cors";
 import { pmnRouter } from "./pmn/pmn.routes";
+import { authRouter } from "./auth/auth.routes";
+import { usersRouter } from "./users/users.routes";
 import { rateLimiter } from "./middleware/rate.limit";
-import { apiKeyAuth } from "./middleware/api.key";
+import { jwtAuth } from "./middleware/jwt.auth";
 import { errorHandler } from "./middleware/error.handler";
 
 const app = express();
@@ -29,7 +31,7 @@ const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? "")
 app.use(
   cors({
     origin: allowedOrigins,
-    allowedHeaders: ["Content-Type", "x-api-key"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
 
@@ -42,9 +44,14 @@ app.get("/health", (_req: Request, res: Response) => {
 // Parse JSON request bodies for POST/PATCH endpoints.
 app.use(express.json());
 
-// API chain: rate limiter runs before auth so unauthenticated floods are capped.
-app.use("/api", rateLimiter, apiKeyAuth);
+// Auth routes — public, rate-limited but no JWT required.
+app.use("/auth", rateLimiter, authRouter);
+
+// API routes — rate-limited, then optional JWT extraction. Individual routes
+// use requireRole() to enforce access levels beyond guest (unauthenticated GET).
+app.use("/api", rateLimiter, jwtAuth);
 app.use("/api/pmn", pmnRouter);
+app.use("/api/users", usersRouter);
 
 // Central error handler — must be registered after all routes.
 app.use(errorHandler);
