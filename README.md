@@ -1,8 +1,8 @@
 # LWC Data Server
 
-A read-only HTTP/JSON API serving water-quality and watershed field data for the
-LWC project. It is a thin, secured layer in front of a PostgreSQL (AWS RDS)
-database, built with Express 5, Prisma 7, and TypeScript.
+An HTTP/JSON API serving water-quality and watershed field data for the LWC
+project. It is a thin, secured layer in front of a PostgreSQL (AWS RDS) database,
+built with Express 5, Prisma 7, and TypeScript.
 
 This README is written for **front-end developers and AI agents** building UIs on
 top of this data. It documents what endpoints exist, the exact shape of every
@@ -18,8 +18,8 @@ run the server locally.
   Missing/invalid → `401`.
 - **CORS:** the browser origin must be in the server's allowlist
   (`CORS_ALLOWED_ORIGINS`). Ask whoever runs the server to add yours.
-- **One data endpoint today:** `GET /api/pmn/combined-field-data` returns the
-  full PMN combined field-data table as `{ "data": [ ... ] }`.
+- **PMN endpoints:** `GET`, `POST`, `PATCH`, and `DELETE` are all live under
+  `/api/pmn/combined-field-data` (and `…/:id` for the latter two).
 - **Health probe:** `GET /health` is public (no key, no rate limit).
 - **Success shape:** `{ "data": <payload> }`. **Error shape:**
   `{ "error": { "message": "..." } }` (generic — never includes DB details).
@@ -48,8 +48,7 @@ Public, unauthenticated, not rate-limited. Intended for load-balancer probes.
 ### `GET /api/pmn/combined-field-data`
 
 Returns **every row** of the `pmn_combined_field_data` table (no pagination,
-filtering, or sorting yet — see [Roadmap](#roadmap--known-gaps)). At the time of
-writing this is ~1000+ rows.
+filtering, or sorting yet — see [Roadmap](#roadmap--known-gaps)).
 
 **Headers:** `x-api-key: <your key>` (required).
 
@@ -59,30 +58,30 @@ writing this is ~1000+ rows.
 {
   "data": [
     {
-      "id": "some-id",
-      "sample_date": "2025-07-14T00:00:00.000Z",
-      "sample_time": "1970-01-01T09:30:00.000Z",
-      "sampling_site": "Round Lake - North",
-      "air_temperature": "24.0",
-      "weather": "Sunny",
+      "id": "b50a0722-0f82-489c-9b12-45825e07b949",
+      "sample_date": "2026-05-01T00:00:00.000Z",
+      "sample_time": "1970-01-01T08:30:00.000Z",
+      "sampling_site": "North Cove",
+      "air_temperature": "14.2",
+      "weather": "Partly Cloudy",
       "wind_direction": "NW",
       "wind_speed": "5-10 mph",
-      "barometeric_pressure": "30.12",
-      "water_temperature": "22.5",
-      "ph": "7.80",
-      "dissolved_oxygen": "8.40",
-      "conductivity": "120",
-      "total_dissolved_solids": "78",
-      "salt_ppt": "0.1",
-      "aphanizomenon": "Yes",
-      "dolichospermum": "No",
-      "microcystis": "Elevated",
-      "planktothrix": "Yes",
-      "raphidiopsis": "No",
-      "woronichinia": "No",
-      "general_comments": "Light surface scum near inlet.",
-      "secchi": "1.20",
-      "source": "Google Sheet"
+      "barometeric_pressure": "1013.2",
+      "water_temperature": "12.8",
+      "ph": "7.4",
+      "dissolved_oxygen": "9.1",
+      "conductivity": "245",
+      "total_dissolved_solids": "163",
+      "salt_ppt": "0.12",
+      "aphanizomenon": "None",
+      "dolichospermum": "None",
+      "microcystis": "None",
+      "planktothrix": "None",
+      "raphidiopsis": "None",
+      "woronichinia": "None",
+      "secchi": "1.8",
+      "general_comments": "Calm conditions, good visibility.",
+      "photos": []
     }
   ]
 }
@@ -92,14 +91,62 @@ Every field except `id` may be `null`. Treat all measurement fields as nullable
 in the UI. See the [field table](#pmn_combined_field_data-the-served-table) for
 types and meaning.
 
-**Errors:**
+### `POST /api/pmn/combined-field-data`
+
+Creates a new record. The database assigns the UUID — do not send `id` in the
+body.
+
+**Headers:** `x-api-key: <your key>`, `Content-Type: application/json`.
+
+**Body:** any subset of the fields in the table (all are optional except none are
+required — an empty `{}` is valid and all nullable fields default to `null`,
+`photos` defaults to `[]`).
+
+```json
+{
+  "sample_date": "2026-07-01T00:00:00.000Z",
+  "sample_time": "1970-01-01T09:00:00.000Z",
+  "sampling_site": "North Cove",
+  "ph": 7.5,
+  "dissolved_oxygen": 8.9
+}
+```
+
+**Response `201`:** the created record as `{ "data": { ... } }`.
+
+### `PATCH /api/pmn/combined-field-data/:id`
+
+Partially updates an existing record. Only the fields present in the body are
+changed; omitted fields are left as-is.
+
+**Headers:** `x-api-key: <your key>`, `Content-Type: application/json`.
+
+**Body:** any subset of mutable fields.
+
+**Response `200`:** the updated record as `{ "data": { ... } }`.
+
+**Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
+does not match any row.
+
+### `DELETE /api/pmn/combined-field-data/:id`
+
+Deletes a record by UUID.
+
+**Headers:** `x-api-key: <your key>`.
+
+**Response `204`:** no body.
+
+**Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
+does not match any row.
+
+### Common error responses
 
 | Status | When | Body |
 | --- | --- | --- |
 | `401` | Missing or invalid `x-api-key` | `{ "error": { "message": "Unauthorized" } }` |
+| `404` | Record not found (PATCH/DELETE) | `{ "error": { "message": "Record not found" } }` |
 | `429` | Rate limit exceeded | `{ "error": { "message": "Too many requests" } }` |
-| `500` | DB/query failure | `{ "error": { "message": "Failed to fetch PMN data" } }` |
-| `404` | Unknown route | Express default HTML 404 |
+| `500` | DB/query failure | `{ "error": { "message": "..." } }` |
 
 > Note: `429` responses also carry standard `RateLimit-*` headers
 > (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`).
@@ -108,10 +155,24 @@ types and meaning.
 
 ```bash
 # Health (no key)
-curl http://localhost:3000/health
+curl http://localhost:3001/health
 
-# PMN data (key required)
-curl http://localhost:3000/api/pmn/combined-field-data \
+# GET all records
+curl http://localhost:3001/api/pmn/combined-field-data \
+  -H "x-api-key: $API_KEY"
+
+# POST — create a record
+curl -X POST http://localhost:3001/api/pmn/combined-field-data \
+  -H "x-api-key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"sampling_site":"North Cove","sample_date":"2026-07-01T00:00:00.000Z"}'
+
+# PATCH — update a field
+curl -X PATCH http://localhost:3001/api/pmn/combined-field-data/<id> \
+  -H "x-api-key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"general_comments":"Updated comment"}'
+
+# DELETE
+curl -X DELETE http://localhost:3001/api/pmn/combined-field-data/<id> \
   -H "x-api-key: $API_KEY"
 ```
 
@@ -144,8 +205,8 @@ There are four Postgres schemas:
 - `users` — a classic RBAC setup: `users`, `roles`, `permissions`, and the
   `user_roles` / `role_permissions` join tables.
 
-All primary keys are UUIDs (`@db.Uuid`), except `pmn_combined_field_data.id`,
-which keeps its source-data business key (a plain string).
+All primary keys are UUIDs (`@db.Uuid`), generated by the database via
+`gen_random_uuid()`.
 
 > **Only `pmn_combined_field_data` is exposed via the API today.** The other
 > tables exist in the database and in the Prisma schema (so models/types are
@@ -161,7 +222,7 @@ returns.
 
 | Column | Type | Notes |
 | --- | --- | --- |
-| `id` | string (PK) | Always present; the only non-null field. |
+| `id` | UUID (PK) | Always present; DB-generated via `gen_random_uuid()`. Do not send on POST. |
 | `sample_date` | date | When the sample was taken. |
 | `sample_time` | time | Time of day of the sample. |
 | `sampling_site` | string | Site name. |
@@ -182,9 +243,9 @@ returns.
 | `planktothrix` | string | Cyanobacteria genus. |
 | `raphidiopsis` | string | Cyanobacteria genus. |
 | `woronichinia` | string | Cyanobacteria genus. |
-| `general_comments` | string | Free text. |
 | `secchi` | decimal | Secchi-disk depth (water clarity). |
-| `source` | string | Provenance of the row (e.g. staff vs. volunteer). |
+| `general_comments` | string | Free text. |
+| `photos` | string[] | Array of photo URLs/paths. Defaults to `[]`. |
 
 ### Other tables (not yet exposed)
 
@@ -299,10 +360,10 @@ src/
     rate.limit.ts           per-IP rate limiter
     error.handler.ts        central error middleware (generic responses)
   pmn/                      reference feature
-    pmn.queries.ts          Prisma access — getAllCombinedFieldData()
-    pmn.service.ts          getCombinedFieldData() + PmnServiceError
-    pmn.controller.ts       handleGetCombinedFieldData()
-    pmn.routes.ts           pmnRouter → GET /combined-field-data
+    pmn.queries.ts          Prisma access — get / create / update / delete
+    pmn.service.ts          service functions + PmnServiceError
+    pmn.controller.ts       GET, POST, PATCH, DELETE handlers
+    pmn.routes.ts           pmnRouter → /combined-field-data (+ /:id)
 prisma/
   schema.prisma             DB models (4 schemas: pmn, camas, watershed_field_data, users)
   migrations/0_init/        baseline migration SQL
@@ -460,12 +521,12 @@ server cert. Read that note before touching DB SSL/connection config.
 
 ## Roadmap / known gaps
 
-- **Read-only, single endpoint.** Only `pmn_combined_field_data` is exposed.
+- **Single feature exposed.** Only `pmn_combined_field_data` has endpoints.
   Camas, locations, and phosphate tables are modeled but not served; the `users`
   RBAC tables exist in the schema but have no auth wired in yet.
-- **No pagination, filtering, or sorting** — the PMN endpoint returns the whole
-  table every call. Front-ends should expect to fetch once and filter/sort
-  client-side for now.
+- **No pagination, filtering, or sorting** — `GET /api/pmn/combined-field-data`
+  returns the whole table every call. Front-ends should expect to fetch once and
+  filter/sort client-side for now.
 - **Single-instance rate limiting** (in-memory store).
 - **RDS cert not verified** (see SSL note above).
 
