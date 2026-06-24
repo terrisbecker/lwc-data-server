@@ -31,9 +31,9 @@ model pmn_combined_field_data {
   planktothrix           String?
   raphidiopsis           String?
   woronichinia           String?
-  general_comments       String?
   secchi                 Decimal?  @db.Decimal
-  source                 String?
+  general_comments       String?
+  photos                 String[]  @default([])
 
   @@schema("pmn")
 }
