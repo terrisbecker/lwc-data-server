@@ -1,18 +1,14 @@
 import type { Request, Response, NextFunction } from "express";
 import { PmnServiceError } from "../pmn/pmn.service";
+import { AuthServiceError } from "../auth/auth.service";
+import { UsersServiceError } from "../users/users.service";
 
-/**
- * Central Express error-handling middleware. Must be registered after all
- * routes. Logs the error server-side and returns a generic JSON body so
- * internal details (e.g. DB errors held in `cause`) are never leaked to clients.
- */
 export function errorHandler(
   err: unknown,
   _req: Request,
   res: Response,
   next: NextFunction,
 ): void {
-  // If the response has already started, defer to Express's default handler.
   if (res.headersSent) {
     next(err);
     return;
@@ -21,7 +17,17 @@ export function errorHandler(
   console.error(err);
 
   if (err instanceof PmnServiceError) {
-    res.status(500).json({ error: { message: "Failed to fetch PMN data" } });
+    res.status(500).json({ error: { message: "Internal server error" } });
+    return;
+  }
+
+  if (err instanceof AuthServiceError) {
+    res.status(500).json({ error: { message: "Internal server error" } });
+    return;
+  }
+
+  if (err instanceof UsersServiceError) {
+    res.status(500).json({ error: { message: "Internal server error" } });
     return;
   }
 

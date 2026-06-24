@@ -13,14 +13,16 @@ run the server locally.
 
 ## TL;DR for front-end / agent consumers
 
-- **Base URL:** `http://<host>:3000` (default port `3000`).
-- **Auth:** every `/api/*` request must send an `x-api-key: <secret>` header.
-  Missing/invalid → `401`.
+- **Base URL:** `http://<host>:3001` (default port `3001`).
+- **Auth:** role-based JWT. Log in at `POST /auth/login` to get a token, then
+  send it as `Authorization: Bearer <token>` on protected requests.
+- **Roles:** three levels — `guest` (unauthenticated), `volunteer`, `admin`.
+  See the [permission table](#roles--permissions) for what each can do.
 - **CORS:** the browser origin must be in the server's allowlist
   (`CORS_ALLOWED_ORIGINS`). Ask whoever runs the server to add yours.
 - **PMN endpoints:** `GET`, `POST`, `PATCH`, and `DELETE` are all live under
   `/api/pmn/combined-field-data` (and `…/:id` for the latter two).
-- **Health probe:** `GET /health` is public (no key, no rate limit).
+- **Health probe:** `GET /health` is public (no auth, no rate limit).
 - **Success shape:** `{ "data": <payload> }`. **Error shape:**
   `{ "error": { "message": "..." } }` (generic — never includes DB details).
 - **Numbers come back as strings.** PostgreSQL `DECIMAL` columns serialize as
@@ -31,7 +33,46 @@ run the server locally.
 
 ---
 
+## Roles & permissions
+
+| Role | GET data | POST data | PATCH data | DELETE data | Manage users |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| **guest** (no token) | ✓ | — | — | — | — |
+| **volunteer** | ✓ | ✓ | — | — | — |
+| **admin** | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+Guests need no credentials — unauthenticated GET requests are always allowed.
+Volunteers and admins authenticate via `POST /auth/login` and send the returned
+JWT as a Bearer token.
+
+---
+
 ## API reference
+
+### `POST /auth/login`
+
+Public. Exchange email + password for a JWT.
+
+**Body:**
+```json
+{ "email": "user@example.com", "password": "..." }
+```
+
+**Response `200`:**
+```json
+{
+  "data": {
+    "token": "<jwt>",
+    "user": { "id": "<uuid>", "email": "user@example.com", "roles": ["volunteer"] }
+  }
+}
+```
+
+**Response `401`:** `{ "error": { "message": "Invalid email or password" } }`
+
+**Response `403`:** `{ "error": { "message": "Account is inactive" } }`
+
+---
 
 ### `GET /health`
 
@@ -45,12 +86,14 @@ Public, unauthenticated, not rate-limited. Intended for load-balancer probes.
 }
 ```
 
+---
+
 ### `GET /api/pmn/combined-field-data`
 
 Returns **every row** of the `pmn_combined_field_data` table (no pagination,
 filtering, or sorting yet — see [Roadmap](#roadmap--known-gaps)).
 
-**Headers:** `x-api-key: <your key>` (required).
+**Auth:** none required (guest access).
 
 **Response `200`:**
 
@@ -91,16 +134,17 @@ Every field except `id` may be `null`. Treat all measurement fields as nullable
 in the UI. See the [field table](#pmn_combined_field_data-the-served-table) for
 types and meaning.
 
+---
+
 ### `POST /api/pmn/combined-field-data`
 
 Creates a new record. The database assigns the UUID — do not send `id` in the
 body.
 
-**Headers:** `x-api-key: <your key>`, `Content-Type: application/json`.
+**Auth:** volunteer or admin (`Authorization: Bearer <token>`).
 
-**Body:** any subset of the fields in the table (all are optional except none are
-required — an empty `{}` is valid and all nullable fields default to `null`,
-`photos` defaults to `[]`).
+**Body:** any subset of the fields in the table (all are optional — an empty
+`{}` is valid; all nullable fields default to `null`, `photos` defaults to `[]`).
 
 ```json
 {
@@ -114,12 +158,14 @@ required — an empty `{}` is valid and all nullable fields default to `null`,
 
 **Response `201`:** the created record as `{ "data": { ... } }`.
 
+---
+
 ### `PATCH /api/pmn/combined-field-data/:id`
 
 Partially updates an existing record. Only the fields present in the body are
 changed; omitted fields are left as-is.
 
-**Headers:** `x-api-key: <your key>`, `Content-Type: application/json`.
+**Auth:** admin only (`Authorization: Bearer <token>`).
 
 **Body:** any subset of mutable fields.
 
@@ -128,52 +174,121 @@ changed; omitted fields are left as-is.
 **Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
 does not match any row.
 
+---
+
 ### `DELETE /api/pmn/combined-field-data/:id`
 
 Deletes a record by UUID.
 
-**Headers:** `x-api-key: <your key>`.
+**Auth:** admin only (`Authorization: Bearer <token>`).
 
 **Response `204`:** no body.
 
 **Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
 does not match any row.
 
+---
+
+### User management (admin only)
+
+All `/api/users` endpoints require an admin JWT.
+
+#### `GET /api/users`
+
+Returns all users. Password hashes are never included in any response.
+
+**Response `200`:** `{ "data": [ { "id", "email", "name", "is_active", "created_at", "updated_at" }, ... ] }`
+
+#### `POST /api/users`
+
+Creates a new user.
+
+**Body:**
+```json
+{ "email": "new@example.com", "password": "...", "name": "Jane", "role": "volunteer" }
+```
+
+`role` defaults to `"volunteer"` if omitted. Valid values: `"admin"`, `"volunteer"`.
+
+**Response `201`:** the created user (no password hash).
+
+**Response `409`:** `{ "error": { "message": "Email already in use" } }`
+
+#### `PATCH /api/users/:id`
+
+Updates a user's email, name, password, or `is_active` flag. Only sent fields
+are changed.
+
+**Body:** any of `{ email?, name?, password?, is_active? }`.
+
+**Response `200`:** the updated user.
+
+**Response `404`:** `{ "error": { "message": "User not found" } }`
+
+#### `DELETE /api/users/:id`
+
+Permanently deletes a user. The cascade on `user_roles` removes the role
+assignment automatically.
+
+**Response `204`:** no body.
+
+**Response `404`:** `{ "error": { "message": "User not found" } }`
+
+---
+
 ### Common error responses
 
 | Status | When | Body |
 | --- | --- | --- |
-| `401` | Missing or invalid `x-api-key` | `{ "error": { "message": "Unauthorized" } }` |
-| `404` | Record not found (PATCH/DELETE) | `{ "error": { "message": "Record not found" } }` |
+| `400` | Missing required fields | `{ "error": { "message": "..." } }` |
+| `401` | No token, invalid/expired token, or wrong credentials | `{ "error": { "message": "Unauthorized" } }` |
+| `403` | Authenticated but insufficient role | `{ "error": { "message": "Forbidden" } }` |
+| `404` | Record or user not found | `{ "error": { "message": "..." } }` |
+| `409` | Duplicate email on create/update | `{ "error": { "message": "Email already in use" } }` |
 | `429` | Rate limit exceeded | `{ "error": { "message": "Too many requests" } }` |
-| `500` | DB/query failure | `{ "error": { "message": "..." } }` |
+| `500` | DB/query failure | `{ "error": { "message": "Internal server error" } }` |
 
 > Note: `429` responses also carry standard `RateLimit-*` headers
 > (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`).
 
+---
+
 ### Quick test
 
 ```bash
-# Health (no key)
+# Health (no auth)
 curl http://localhost:3001/health
 
-# GET all records
-curl http://localhost:3001/api/pmn/combined-field-data \
-  -H "x-api-key: $API_KEY"
+# GET all records — no token needed
+curl http://localhost:3001/api/pmn/combined-field-data
 
-# POST — create a record
+# Log in and capture the token
+TOKEN=$(curl -s -X POST http://localhost:3001/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"<password>"}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
+
+# POST — create a record (volunteer or admin)
 curl -X POST http://localhost:3001/api/pmn/combined-field-data \
-  -H "x-api-key: $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{"sampling_site":"North Cove","sample_date":"2026-07-01T00:00:00.000Z"}'
 
-# PATCH — update a field
+# PATCH — update a field (admin only)
 curl -X PATCH http://localhost:3001/api/pmn/combined-field-data/<id> \
-  -H "x-api-key: $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{"general_comments":"Updated comment"}'
 
-# DELETE
+# DELETE (admin only)
 curl -X DELETE http://localhost:3001/api/pmn/combined-field-data/<id> \
-  -H "x-api-key: $API_KEY"
+  -H "Authorization: Bearer $TOKEN"
+
+# Create a new user (admin only)
+curl -X POST http://localhost:3001/api/users \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"vol@example.com","password":"...","role":"volunteer"}'
 ```
 
 ---
@@ -202,17 +317,15 @@ There are four Postgres schemas:
 - `pmn` — `pmn_combined_field_data` (the served table).
 - `camas` — `camas_city_data` (Camas city water readings).
 - `watershed_field_data` — `locations` + `phosphate_data` (lab data).
-- `users` — a classic RBAC setup: `users`, `roles`, `permissions`, and the
-  `user_roles` / `role_permissions` join tables.
+- `users` — RBAC: `users`, `roles`, `permissions`, `user_roles`, `role_permissions`.
 
 All primary keys are UUIDs (`@db.Uuid`), generated by the database via
 `gen_random_uuid()`.
 
-> **Only `pmn_combined_field_data` is exposed via the API today.** The other
-> tables exist in the database and in the Prisma schema (so models/types are
-> generated for them) but have no endpoints yet. The `users` RBAC tables are
-> schema-only — no auth code is wired into them yet. They are documented here so
-> front-end/agent work can anticipate future endpoints.
+> **Only `pmn_combined_field_data` is exposed as a data endpoint today.** The
+> `users` schema powers authentication and user management (`/auth` and
+> `/api/users`). The `camas` and `watershed_field_data` tables exist in the
+> schema and have generated Prisma types but no endpoints yet.
 
 ### `pmn_combined_field_data` (the served table)
 
@@ -247,7 +360,7 @@ returns.
 | `general_comments` | string | Free text. |
 | `photos` | string[] | Array of photo URLs/paths. Defaults to `[]`. |
 
-### Other tables (not yet exposed)
+### Other tables (not yet exposed as data endpoints)
 
 <details>
 <summary><code>camas_city_data</code> — Camas city water readings (schema: camas)</summary>
@@ -276,18 +389,18 @@ exposed.
 <details>
 <summary><code>users</code> — RBAC (schema: users)</summary>
 
-A classic user/role/permission model. All UUID PKs.
+A classic user/role/permission model. All UUID PKs. Seeded with three roles
+(`admin`, `volunteer`, `guest`) and five permissions (`data:read`, `data:write`,
+`data:update`, `data:delete`, `users:manage`).
 
 - `users` — `id`, `email` (unique), `password_hash`, `name`, `is_active`,
   `created_at`, `updated_at`.
 - `roles` — `id`, `name` (unique), `description`.
 - `permissions` — `id`, `name` (unique), `description`.
-- `user_roles` — join table (`user_id`, `role_id` composite PK, `assigned_at`),
+- `user_roles` — join table (`user_id`, `role_id` composite PK, `assigned_at`);
   FKs cascade.
-- `role_permissions` — join table (`role_id`, `permission_id` composite PK),
+- `role_permissions` — join table (`role_id`, `permission_id` composite PK);
   FKs cascade.
-
-Schema-only for now — no auth code (login, hashing, role checks) is wired in yet.
 </details>
 
 ### Field types & gotchas
@@ -321,27 +434,34 @@ API features follow a layered pattern, one directory per feature under `src/`:
    → *.routes.ts     Express Router
 ```
 
-`src/index.ts` wires it together: it mounts each feature router (e.g.
-`/api/pmn`) and registers the central error middleware **last**. The error
-middleware logs the full error server-side but returns only a generic JSON body,
-so DB internals never reach clients. **PMN (`src/pmn/`) is the reference
-implementation** to copy when adding a new feature.
+`src/index.ts` wires it together: it mounts each feature router and registers
+the central error middleware **last**. The error middleware logs the full error
+server-side but returns only a generic JSON body, so DB internals never reach
+clients. **PMN (`src/pmn/`) is the reference implementation** to copy when adding
+a new feature.
 
 ### Request lifecycle / middleware chain
 
 ```
-helmet            security headers, strips X-Powered-By
- → cors           allowlist from CORS_ALLOWED_ORIGINS
- → /health        (registered BEFORE /api — public, no auth, no rate limit)
- → rateLimiter    per-IP, mounted on /api BEFORE auth so unauth floods are capped
- → apiKeyAuth     requires x-api-key; fails closed (process won't start w/o API_KEY)
- → feature routers (/api/pmn, ...)
- → errorHandler   (last) logs full error, returns generic body
+helmet              security headers, strips X-Powered-By
+ → cors             allowlist from CORS_ALLOWED_ORIGINS; allows Authorization header
+ → /health          (public, no auth, no rate limit)
+ → rateLimiter      per-IP; applied to both /auth and /api before auth
+ → /auth/login      public login endpoint (no JWT required)
+ → jwtAuth          optional JWT extraction on /api — sets req.user if token valid;
+                    passes through if no token (guest); 401 if token present but invalid
+ → requireRole()    per-route guard — 401 unauthenticated, 403 insufficient role
+ → feature routers  (/api/pmn, /api/users)
+ → errorHandler     (last) logs full error, returns generic body
 ```
 
-- **`apiKeyAuth`** (`src/middleware/api.key.ts`) compares `x-api-key` against
-  `API_KEY` with a constant-time compare, and **throws at startup if `API_KEY`
-  is unset** (fail-closed).
+- **`jwtAuth`** (`src/middleware/jwt.auth.ts`) validates a `Bearer` token if
+  present. No token = guest access (passes through). Invalid/expired token = 401
+  (never silently treated as guest). **Throws at startup if `JWT_SECRET` is
+  unset** (fail-closed).
+- **`requireRole(role)`** (`src/middleware/require.role.ts`) is a middleware
+  factory that enforces a minimum role level: `"volunteer"` (allows volunteer and
+  admin) or `"admin"` (admin only). Applied per-route, not globally.
 - **`rateLimiter`** (`src/middleware/rate.limit.ts`) uses an in-memory store —
   fine for a single instance; a multi-instance deploy needs a shared store
   (e.g. Redis). Defaults: 100 requests / 15 min per IP.
@@ -355,25 +475,39 @@ helmet            security headers, strips X-Powered-By
 src/
   index.ts                  app bootstrap, middleware chain, route mounting
   db.ts                     shared Prisma client (pg adapter, RDS SSL)
+  types/
+    express.d.ts            req.user type augmentation
   middleware/
-    api.key.ts              x-api-key auth (constant-time, fail-closed)
+    jwt.auth.ts             optional JWT extraction (fail-closed on missing JWT_SECRET)
+    require.role.ts         requireRole() factory — enforces volunteer/admin levels
     rate.limit.ts           per-IP rate limiter
     error.handler.ts        central error middleware (generic responses)
+  auth/                     login feature
+    auth.queries.ts         findUserByEmail (with roles join)
+    auth.service.ts         loginUser — bcrypt verify, JWT sign, AuthServiceError
+    auth.controller.ts      POST /login handler
+    auth.routes.ts          authRouter → /login
+  users/                    user management feature (admin only)
+    users.queries.ts        CRUD + findRoleByName; omits password_hash at query level
+    users.service.ts        listUsers, createNewUser, patchUser, removeUser
+    users.controller.ts     GET / POST / PATCH / DELETE handlers
+    users.routes.ts         usersRouter (all routes wrapped in requireRole("admin"))
   pmn/                      reference feature
     pmn.queries.ts          Prisma access — get / create / update / delete
     pmn.service.ts          service functions + PmnServiceError
     pmn.controller.ts       GET, POST, PATCH, DELETE handlers
-    pmn.routes.ts           pmnRouter → /combined-field-data (+ /:id)
+    pmn.routes.ts           pmnRouter — GET public, POST volunteer+, PATCH/DELETE admin
 prisma/
   schema.prisma             DB models (4 schemas: pmn, camas, watershed_field_data, users)
+  seed.ts                   idempotent seed: roles, permissions, role-permissions, admin user
   migrations/0_init/        baseline migration SQL
-generated/prisma/           Prisma client output (gitignored, generated)
+generated/prisma/           Prisma client output (gitignored, generated by `prisma generate`)
 scripts/
   test-pmn-query.ts         standalone runner that hits the DB directly
   test-query.sh             wrapper that runs the above
-prisma.config.ts            Prisma CLI config (schema + datasource URL)
+prisma.config.ts            Prisma CLI config (schema, datasource URL, seed command)
 nodemon.json                dev runner (ts-node on src)
-tsconfig.json               TS config (target ES2020, CommonJS)
+tsconfig.json               TS config (target ES2020, CommonJS, ts-node: { files: true })
 ```
 
 ---
@@ -401,23 +535,26 @@ npx prisma generate
 cp .env.example .env
 ```
 
-Then edit `.env`. You must set at minimum `DATABASE_URL` and `API_KEY`:
+Then edit `.env`. Required variables are `DATABASE_URL` and `JWT_SECRET`:
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `DATABASE_URL` | **yes** | — | Postgres connection string. If unset, the pg adapter silently falls back to `localhost:5432` and queries fail with `ECONNREFUSED`. |
 | `DATABASE_SSL` | no | _(SSL on)_ | Set to `false` to disable SSL/TLS on the DB connection. Required for a plain local Postgres (e.g. the Docker container); leave unset for AWS RDS, which requires SSL. |
-| `API_KEY` | **yes** | — | Shared secret for the `x-api-key` header. **Server refuses to start if unset.** |
+| `JWT_SECRET` | **yes** | — | Secret used to sign and verify JWTs. Must be at least 32 random characters. **Server refuses to start if unset.** |
+| `JWT_EXPIRES_IN` | no | `8h` | How long issued tokens remain valid. Uses [`ms`](https://github.com/vercel/ms) format (e.g. `8h`, `1d`, `30m`). |
+| `ADMIN_SEED_EMAIL` | seed only | — | Email for the initial admin user. Only read by `npm run seed`. |
+| `ADMIN_SEED_PASSWORD` | seed only | — | Password for the initial admin user. Only read by `npm run seed`. |
 | `PORT` | no | `3000` | HTTP port. |
 | `CORS_ALLOWED_ORIGINS` | no | _(empty = deny all cross-origin)_ | Comma-separated origin allowlist, e.g. `http://localhost:5173`. |
-| `RATE_LIMIT_WINDOW_MS` | no | `900000` (15 min) | Rate-limit window. |
+| `RATE_LIMIT_WINDOW_MS` | no | `900000` (15 min) | Rate-limit window in milliseconds. |
 | `RATE_LIMIT_MAX` | no | `100` | Max requests per window per IP. |
 | `TRUST_PROXY` | no | `0` | Number of trusted proxy hops in front of the app. |
 
-Generate a strong API key with:
+Generate a strong JWT secret with:
 
 ```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+openssl rand -hex 32
 ```
 
 ### Local development with Docker
@@ -436,13 +573,12 @@ DATABASE_URL=postgresql://lwc:lwc@localhost:5432/lwc_data
 DATABASE_SSL=false
 ```
 
-Apply the schema to the fresh database (creates the `pmn`, `camas`,
-`watershed_field_data`, and `users` schemas + tables from the baseline
-migration):
+Apply the schema and seed the initial data:
 
 ```bash
 npx prisma generate         # if not already done
-npx prisma migrate deploy
+npx prisma migrate deploy   # creates all tables from the baseline migration
+npm run seed                # seeds roles, permissions, and initial admin user
 ```
 
 Then run the app as usual (`npm run dev`). Managing the container:
@@ -453,8 +589,8 @@ docker compose down         # stop (keeps data in the named volume)
 docker compose down -v      # stop and wipe the database
 ```
 
-The tables start empty, so endpoints return `{ "data": [] }` until you load
-data — this still confirms end-to-end connectivity to the local DB.
+The PMN table starts empty (endpoints return `{ "data": [] }` until you load
+data) — but a successful empty response still confirms end-to-end connectivity.
 
 ### Run
 
@@ -462,6 +598,7 @@ data — this still confirms end-to-end connectivity to the local DB.
 npm run dev      # nodemon + ts-node, watches src/
 npm run build    # tsc → dist/
 npm start        # node dist/src/index.js (run build first)
+npm run seed     # (re-)seed roles and admin user; idempotent, safe to re-run
 ```
 
 `src/index.ts` loads env via `import "dotenv/config"` as its **first** line, so
@@ -493,10 +630,13 @@ Copy the `src/pmn/` feature as a template:
    manually as a property — see `PmnServiceError`.)
 3. `*.controller.ts` — Express handler; respond `{ data }`, `next(err)` on
    failure. Never touch Prisma here.
-4. `*.routes.ts` — an Express `Router`.
+4. `*.routes.ts` — an Express `Router`. Apply `requireRole("volunteer")` or
+   `requireRole("admin")` per-route as needed. `GET` routes are public by
+   default (no `requireRole`).
 5. In `src/index.ts`, mount the router under `/api/<feature>` **before** the
-   `errorHandler`, and add a branch in `error.handler.ts` if the new
-   `*ServiceError` needs a distinct status/message.
+   `errorHandler`.
+6. In `src/middleware/error.handler.ts`, add the new `*ServiceError` to the
+   handler so unexpected DB errors return a feature-specific message.
 
 ---
 
@@ -506,8 +646,8 @@ Copy the `src/pmn/` feature as a template:
 - **Data:** Prisma 7 with the `@prisma/adapter-pg` driver adapter over `pg`,
   against PostgreSQL (local Docker for development; AWS RDS-compatible for
   deployment).
-- **Security:** `helmet`, `cors`, `express-rate-limit`, custom constant-time API
-  key auth.
+- **Security:** `helmet`, `cors`, `express-rate-limit`, JWT authentication
+  (`jsonwebtoken`) with `bcryptjs` password hashing and role-based access control.
 - **Dev:** `nodemon` + `ts-node`.
 
 ### Database SSL note
@@ -521,9 +661,11 @@ server cert. Read that note before touching DB SSL/connection config.
 
 ## Roadmap / known gaps
 
-- **Single feature exposed.** Only `pmn_combined_field_data` has endpoints.
-  Camas, locations, and phosphate tables are modeled but not served; the `users`
-  RBAC tables exist in the schema but have no auth wired in yet.
+- **Single data feature exposed.** Only `pmn_combined_field_data` has endpoints.
+  Camas, locations, and phosphate tables are modeled but not served.
+- **No role reassignment.** A user's role is set at creation via `POST /api/users`.
+  There is no endpoint to change an existing user's role — requires direct DB
+  access for now.
 - **No pagination, filtering, or sorting** — `GET /api/pmn/combined-field-data`
   returns the whole table every call. Front-ends should expect to fetch once and
   filter/sort client-side for now.
