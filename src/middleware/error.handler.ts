@@ -14,19 +14,19 @@ export function errorHandler(
     return;
   }
 
-  console.error(err);
+  // Log only the error's own fields — not the chained `.cause`, which may
+  // contain DB connection details or raw query text.
+  const entry =
+    err instanceof Error
+      ? { name: err.name, message: err.message, stack: err.stack }
+      : { message: String(err) };
+  console.error(JSON.stringify(entry));
 
-  if (err instanceof PmnServiceError) {
-    res.status(500).json({ error: { message: "Internal server error" } });
-    return;
-  }
-
-  if (err instanceof AuthServiceError) {
-    res.status(500).json({ error: { message: "Internal server error" } });
-    return;
-  }
-
-  if (err instanceof UsersServiceError) {
+  if (
+    err instanceof PmnServiceError ||
+    err instanceof AuthServiceError ||
+    err instanceof UsersServiceError
+  ) {
     res.status(500).json({ error: { message: "Internal server error" } });
     return;
   }

@@ -8,6 +8,9 @@ import {
   DuplicateEmailError,
 } from "./users.service";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const VALID_ROLES = new Set(["admin", "volunteer"]);
+
 export async function handleGetUsers(
   _req: Request,
   res: Response,
@@ -39,6 +42,11 @@ export async function handleCreateUser(
       return;
     }
 
+    if (role !== undefined && !VALID_ROLES.has(role)) {
+      res.status(400).json({ error: { message: `role must be one of: ${[...VALID_ROLES].join(", ")}` } });
+      return;
+    }
+
     const data = await createNewUser({ email, password, name, role });
     res.status(201).json({ data });
   } catch (err) {
@@ -55,6 +63,11 @@ export async function handleUpdateUser(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
+  if (!UUID_RE.test(req.params.id as string)) {
+    res.status(400).json({ error: { message: "Invalid id" } });
+    return;
+  }
+
   try {
     const data = await patchUser(
       req.params.id as string,
@@ -79,6 +92,11 @@ export async function handleDeleteUser(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
+  if (!UUID_RE.test(req.params.id as string)) {
+    res.status(400).json({ error: { message: "Invalid id" } });
+    return;
+  }
+
   try {
     await removeUser(req.params.id as string);
     res.status(204).send();

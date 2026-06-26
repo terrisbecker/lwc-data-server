@@ -5,7 +5,7 @@ import cors from "cors";
 import { pmnRouter } from "./pmn/pmn.routes";
 import { authRouter } from "./auth/auth.routes";
 import { usersRouter } from "./users/users.routes";
-import { rateLimiter } from "./middleware/rate.limit";
+import { rateLimiter, loginRateLimiter } from "./middleware/rate.limit";
 import { jwtAuth } from "./middleware/jwt.auth";
 import { errorHandler } from "./middleware/error.handler";
 
@@ -44,8 +44,8 @@ app.get("/health", (_req: Request, res: Response) => {
 // Parse JSON request bodies for POST/PATCH endpoints.
 app.use(express.json());
 
-// Auth routes — public, rate-limited but no JWT required.
-app.use("/auth", rateLimiter, authRouter);
+// Auth routes — public, stricter rate limit to cap brute-force attempts.
+app.use("/auth", loginRateLimiter, authRouter);
 
 // API routes — rate-limited, then optional JWT extraction. Individual routes
 // use requireRole() to enforce access levels beyond guest (unauthenticated GET).
