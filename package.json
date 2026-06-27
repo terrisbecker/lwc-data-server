@@ -9,7 +9,7 @@
   "scripts": {
     "test": "test",
     "dev": "nodemon",
-    "build": "tsc",
+    "build": "npx tsc",
     "start": "node dist/src/index.js",
     "seed": "npx prisma db seed"
   },
