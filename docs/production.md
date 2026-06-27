@@ -80,12 +80,13 @@ git clone git@github.com:terrisbecker/lwc-data-server.git
 ## 4. Install dependencies
 
 ```bash
-npm ci --omit=dev
+npm ci
 ```
 
 > `npm ci` installs from `package-lock.json` exactly (reproducible build).
-> `--omit=dev` skips `nodemon`, `ts-node`, and TypeScript types — only runtime
-> deps are installed in production.
+> Install **all** deps here (including devDeps) — TypeScript and `@types/*`
+> packages are required to compile in step 7. After the build you can optionally
+> run `npm prune --omit=dev` to remove them and save disk space.
 
 ---
 
@@ -168,15 +169,20 @@ If you get `connection refused` or `no pg_hba.conf entry`:
 ## 7. Build TypeScript
 
 ```bash
+# Generate the Prisma client FIRST — tsc imports types from generated/prisma/client
+npx prisma generate
+
 npm run build
 ```
 
-This compiles `src/` → `dist/` via `tsc`. The compiled output is committed as
-`dist/` — if so, skip this step and go straight to generating the Prisma client.
+`npx prisma generate` must run before `tsc` because source files import types
+from `generated/prisma/client` (gitignored). Running `tsc` first produces ~10
+"Cannot find module" errors.
+
+After building you can optionally prune devDependencies to save disk space:
 
 ```bash
-# Generate the Prisma client into generated/prisma/ (required after every fresh clone)
-npx prisma generate
+npm prune --omit=dev
 ```
 
 ---
@@ -267,9 +273,10 @@ the EC2 should not be reachable on 3001 from the internet.
 ```bash
 cd /home/ubuntu/lwc-data-server
 git pull
-npm ci --omit=dev
+npm ci
 npx prisma generate
 npm run build
+npm prune --omit=dev        # optional: remove devDeps after build
 npx prisma migrate deploy   # only if there are new migrations
 pm2 restart lwc-data-server
 ```
