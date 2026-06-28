@@ -253,18 +253,102 @@ After this, PM2 will restart the server automatically after a reboot.
 
 ---
 
-## 12. Configure the firewall (ufw)
+## 12. Set up nginx as a reverse proxy
+
+nginx sits in front of the Node process, accepting traffic on port 80 and
+forwarding it to `localhost:3001`. This keeps the app port off the public
+internet and lets you add TLS termination later without touching the app.
+
+### Install nginx
+
+```bash
+sudo apt install -y nginx
+```
+
+### Create a site config
+
+```bash
+sudo nano /etc/nginx/sites-available/lwc-data-server
+```
+
+Paste the following (replace `your-domain.com` with your EC2 hostname or public
+IP if you do not have a domain yet — `_` matches any name):
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location / {
+        proxy_pass         http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 60s;
+    }
+}
+```
+
+### Enable the site and reload nginx
+
+```bash
+# Remove the default placeholder
+sudo rm /etc/nginx/sites-enabled/default
+
+# Symlink the new config into sites-enabled
+sudo ln -s /etc/nginx/sites-available/lwc-data-server /etc/nginx/sites-enabled/
+
+# Verify the config is valid
+sudo nginx -t
+
+# Apply it
+sudo systemctl reload nginx
+```
+
+### Enable nginx on boot
+
+```bash
+sudo systemctl enable nginx
+```
+
+### Smoke-test through nginx
+
+```bash
+curl http://localhost/health
+```
+
+Expected response (same as hitting port 3001 directly):
+
+```json
+{ "status": "ok", "uptime": 1.23, "timestamp": "2026-01-01T00:00:00.000Z" }
+```
+
+> **`TRUST_PROXY`** — with nginx forwarding requests, Express sees `127.0.0.1`
+> as the client IP unless you set `TRUST_PROXY=1` in `.env`. That tells the rate
+> limiter and any IP-based logic to read `X-Forwarded-For` instead.
+
+---
+
+## 13. Configure the firewall (ufw)
+
+With nginx handling port 80, there is no need to expose port 3001 publicly.
 
 ```bash
 sudo ufw allow OpenSSH
-sudo ufw allow 3001/tcp    # app port — skip if you put an ALB in front
+sudo ufw allow 'Nginx HTTP'    # opens port 80
 sudo ufw enable
 sudo ufw status
 ```
 
-If you are placing an ALB in front, open port 3001 only from the ALB's security
-group in the EC2 security group (AWS console) and do not open it in ufw at all —
-the EC2 should not be reachable on 3001 from the internet.
+Do **not** add a rule for port 3001 — the app should only be reachable via nginx
+on localhost.
+
+If you are placing an ALB in front of the EC2, restrict port 80 to the ALB's
+security group in the AWS console instead of opening it with ufw.
 
 ---
 
