@@ -22,6 +22,8 @@ run the server locally.
   (`CORS_ALLOWED_ORIGINS`). Ask whoever runs the server to add yours.
 - **PMN endpoints:** `GET`, `POST`, `PATCH`, and `DELETE` are all live under
   `/api/pmn/combined-field-data` (and `…/:id` for the latter two).
+- **Image uploads:** volunteers and admins can upload up to 10 images at a time
+  via presigned S3 URLs — see [Image uploads](#image-uploads-apiunloads).
 - **Health probe:** `GET /health` is public (no auth, no rate limit).
 - **Success shape:** `{ "data": <payload> }`. **Error shape:**
   `{ "error": { "message": "..." } }` (generic — never includes DB details).
@@ -35,11 +37,11 @@ run the server locally.
 
 ## Roles & permissions
 
-| Role | GET data | POST data | PATCH data | DELETE data | Manage users |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| **guest** (no token) | ✓ | — | — | — | — |
-| **volunteer** | ✓ | ✓ | — | — | — |
-| **admin** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Role | GET data | POST data | PATCH data | DELETE data | Upload images | Manage users |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **guest** (no token) | ✓ | — | — | — | — | — |
+| **volunteer** | ✓ | ✓ | — | — | ✓ | — |
+| **admin** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Guests need no credentials — unauthenticated GET requests are always allowed.
 Volunteers and admins authenticate via `POST /auth/login` and send the returned
@@ -189,6 +191,130 @@ does not match any row.
 
 ---
 
+### Image uploads (`/api/uploads`)
+
+All upload endpoints require at minimum a volunteer JWT.
+
+#### `POST /api/uploads/presigned-urls`
+
+Request presigned S3 PUT URLs for up to 10 images. The client uploads each file
+directly to S3 using the returned URL — the file never passes through this server.
+
+**Auth:** volunteer or admin.
+
+**Body:**
+```json
+{
+  "files": [
+    { "filename": "photo.jpg", "contentType": "image/jpeg", "sizeBytes": 204800 },
+    { "filename": "site.png",  "contentType": "image/png",  "sizeBytes": 512000 }
+  ]
+}
+```
+
+- `files` must be a non-empty array with at most 10 entries.
+- Allowed `contentType` values: `image/jpeg`, `image/png`, `image/webp`, `image/gif`.
+- `sizeBytes` must be between 1 byte and 10 MB (10,485,760 bytes). This is a
+  declared size — the server validates it, and the S3 PUT will fail for any file
+  exceeding the limit enforced by the bucket policy.
+
+**Response `201`:**
+```json
+{
+  "data": [
+    {
+      "uploadId": "<uuid>",
+      "presignedUrl": "https://s3.amazonaws.com/...",
+      "objectKey": "uploads/<userId>/<uuid>.jpg"
+    }
+  ]
+}
+```
+
+The `presignedUrl` expires in **5 minutes**. PUT the raw file bytes directly to
+that URL with the matching `Content-Type` header — no multipart encoding.
+
+```bash
+curl -X PUT "<presignedUrl>" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @photo.jpg
+```
+
+After the PUT succeeds, call `POST /api/uploads/confirm` to mark the records
+confirmed in the database.
+
+---
+
+#### `POST /api/uploads/confirm`
+
+Mark one or more uploads as confirmed after the S3 PUT succeeds. Only the
+authenticated user's own pending uploads are updated — passing another user's
+IDs has no effect.
+
+**Auth:** volunteer or admin.
+
+**Body:**
+```json
+{ "uploadIds": ["<uuid>", "<uuid>"] }
+```
+
+**Response `200`:**
+```json
+{ "data": { "confirmed": 2 } }
+```
+
+`confirmed` is the count of records actually updated (pending → confirmed). IDs
+that are already confirmed, don't exist, or belong to another user are silently
+skipped.
+
+---
+
+#### `GET /api/uploads/:id/url`
+
+Get a short-lived presigned S3 GET URL for a single upload. Only the upload's
+owner can request its URL.
+
+**Auth:** volunteer or admin.
+
+**Response `200`:**
+```json
+{ "data": { "url": "https://s3.amazonaws.com/..." } }
+```
+
+The URL expires in **15 minutes**. It carries an `inline` content-disposition
+header so browsers render the image directly rather than downloading it.
+
+**Response `404`:** upload not found or belongs to another user.
+
+---
+
+#### `GET /api/uploads`
+
+List the authenticated user's confirmed uploads, newest first.
+
+**Auth:** volunteer or admin.
+
+**Response `200`:**
+```json
+{
+  "data": [
+    {
+      "id": "<uuid>",
+      "user_id": "<uuid>",
+      "original_name": "photo.jpg",
+      "object_key": "uploads/<userId>/<uuid>.jpg",
+      "content_type": "image/jpeg",
+      "size_bytes": 204800,
+      "status": "confirmed",
+      "created_at": "2026-06-28T12:00:00.000Z",
+      "updated_at": "2026-06-28T12:01:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
 ### User management (admin only)
 
 All `/api/users` endpoints require an admin JWT.
@@ -289,6 +415,35 @@ curl -X POST http://localhost:3001/api/users \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"email":"vol@example.com","password":"...","role":"volunteer"}'
+
+# Request presigned upload URLs for two images (volunteer or admin)
+UPLOAD_RESP=$(curl -s -X POST http://localhost:3001/api/uploads/presigned-urls \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "files": [
+      {"filename":"photo.jpg","contentType":"image/jpeg","sizeBytes":204800}
+    ]
+  }')
+PRESIGNED_URL=$(echo "$UPLOAD_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['presignedUrl'])")
+UPLOAD_ID=$(echo "$UPLOAD_RESP"    | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['uploadId'])")
+
+# PUT the file directly to S3 (no Authorization header — S3 uses the signed URL)
+curl -X PUT "$PRESIGNED_URL" -H "Content-Type: image/jpeg" --data-binary @photo.jpg
+
+# Confirm the upload
+curl -X POST http://localhost:3001/api/uploads/confirm \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"uploadIds\":[\"$UPLOAD_ID\"]}"
+
+# Get a presigned download URL
+curl http://localhost:3001/api/uploads/$UPLOAD_ID/url \
+  -H "Authorization: Bearer $TOKEN"
+
+# List your uploads
+curl http://localhost:3001/api/uploads \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -317,15 +472,15 @@ There are four Postgres schemas:
 - `pmn` — `pmn_combined_field_data` (the served table).
 - `camas` — `camas_city_data` (Camas city water readings).
 - `watershed_field_data` — `locations` + `phosphate_data` (lab data).
-- `users` — RBAC: `users`, `roles`, `permissions`, `user_roles`, `role_permissions`.
+- `users` — RBAC: `users`, `roles`, `permissions`, `user_roles`, `role_permissions`, `upload`.
 
 All primary keys are UUIDs (`@db.Uuid`), generated by the database via
 `gen_random_uuid()`.
 
-> **Only `pmn_combined_field_data` is exposed as a data endpoint today.** The
-> `users` schema powers authentication and user management (`/auth` and
-> `/api/users`). The `camas` and `watershed_field_data` tables exist in the
-> schema and have generated Prisma types but no endpoints yet.
+> **Only `pmn_combined_field_data` is exposed as a data endpoint today** (plus
+> auth, user management, and image uploads). The `camas` and
+> `watershed_field_data` tables exist in the schema and have generated Prisma
+> types but no endpoints yet.
 
 ### `pmn_combined_field_data` (the served table)
 
@@ -387,7 +542,7 @@ exposed.
 </details>
 
 <details>
-<summary><code>users</code> — RBAC (schema: users)</summary>
+<summary><code>users</code> — RBAC + uploads (schema: users)</summary>
 
 A classic user/role/permission model. All UUID PKs. Seeded with three roles
 (`admin`, `volunteer`, `guest`) and five permissions (`data:read`, `data:write`,
@@ -401,6 +556,11 @@ A classic user/role/permission model. All UUID PKs. Seeded with three roles
   FKs cascade.
 - `role_permissions` — join table (`role_id`, `permission_id` composite PK);
   FKs cascade.
+- `upload` — image upload metadata: `id`, `user_id` (FK → `users`, cascade
+  delete), `original_name`, `object_key` (unique S3 key), `content_type`,
+  `size_bytes`, `status` (`"pending"` | `"confirmed"`), `created_at`,
+  `updated_at`. Object keys follow the pattern
+  `uploads/<userId>/<uuid>.<ext>`.
 </details>
 
 ### Field types & gotchas
@@ -451,14 +611,15 @@ helmet              security headers, strips X-Powered-By
  → jwtAuth          optional JWT extraction on /api — sets req.user if token valid;
                     passes through if no token (guest); 401 if token present but invalid
  → requireRole()    per-route guard — 401 unauthenticated, 403 insufficient role
- → feature routers  (/api/pmn, /api/users)
+ → feature routers  (/api/pmn, /api/users, /api/uploads)
  → errorHandler     (last) logs full error, returns generic body
 ```
 
 - **`jwtAuth`** (`src/middleware/jwt.auth.ts`) validates a `Bearer` token if
   present. No token = guest access (passes through). Invalid/expired token = 401
   (never silently treated as guest). **Throws at startup if `JWT_SECRET` is
-  unset** (fail-closed).
+  unset** (fail-closed). Similarly, **`src/s3.ts` throws at startup if
+  `AWS_REGION` or `S3_BUCKET_NAME` are unset** — same fail-closed pattern.
 - **`requireRole(role)`** (`src/middleware/require.role.ts`) is a middleware
   factory that enforces a minimum role level: `"volunteer"` (allows volunteer and
   admin) or `"admin"` (admin only). Applied per-route, not globally.
@@ -497,6 +658,12 @@ src/
     pmn.service.ts          service functions + PmnServiceError
     pmn.controller.ts       GET, POST, PATCH, DELETE handlers
     pmn.routes.ts           pmnRouter — GET public, POST volunteer+, PATCH/DELETE admin
+  uploads/                  image upload feature
+    uploads.queries.ts      Prisma access — create batch, confirm, find by ID, list by user
+    uploads.service.ts      presigned URL generation + UploadsServiceError
+    uploads.controller.ts   POST /presigned-urls, POST /confirm, GET /:id/url, GET /
+    uploads.routes.ts       uploadsRouter — all routes require volunteer+
+  s3.ts                     shared S3Client singleton (IAM role; throws at startup if AWS_REGION or S3_BUCKET_NAME unset)
 prisma/
   schema.prisma             DB models (4 schemas: pmn, camas, watershed_field_data, users)
   seed.ts                   idempotent seed: roles, permissions, role-permissions, admin user
@@ -550,6 +717,14 @@ Then edit `.env`. Required variables are `DATABASE_URL` and `JWT_SECRET`:
 | `RATE_LIMIT_WINDOW_MS` | no | `900000` (15 min) | Rate-limit window in milliseconds. |
 | `RATE_LIMIT_MAX` | no | `100` | Max requests per window per IP. |
 | `TRUST_PROXY` | no | `0` | Number of trusted proxy hops in front of the app. |
+| `AWS_REGION` | **yes** | — | AWS region where the S3 bucket lives (e.g. `us-east-1`). **Server refuses to start if unset.** |
+| `S3_BUCKET_NAME` | **yes** | — | Name of the S3 bucket for image uploads. **Server refuses to start if unset.** |
+
+> **AWS credentials:** On EC2, credentials come from the IAM instance role
+> automatically — do not set `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` in
+> `.env`. The AWS SDK picks up instance metadata credentials with no extra
+> configuration. If running outside EC2, set those two variables in your
+> environment (not in `.env` for production).
 
 Generate a strong JWT secret with:
 
@@ -648,6 +823,9 @@ Copy the `src/pmn/` feature as a template:
   deployment).
 - **Security:** `helmet`, `cors`, `express-rate-limit`, JWT authentication
   (`jsonwebtoken`) with `bcryptjs` password hashing and role-based access control.
+- **Storage:** AWS S3 via `@aws-sdk/client-s3` and `@aws-sdk/s3-request-presigner`.
+  Files upload directly from the client to S3 via short-lived presigned PUT URLs;
+  they are never proxied through this server.
 - **Dev:** `nodemon` + `ts-node`.
 
 ### Database SSL note
@@ -661,8 +839,8 @@ server cert. Read that note before touching DB SSL/connection config.
 
 ## Roadmap / known gaps
 
-- **Single data feature exposed.** Only `pmn_combined_field_data` has endpoints.
-  Camas, locations, and phosphate tables are modeled but not served.
+- **Limited data features exposed.** Only `pmn_combined_field_data` has data
+  endpoints. Camas, locations, and phosphate tables are modeled but not served.
 - **No role reassignment.** A user's role is set at creation via `POST /api/users`.
   There is no endpoint to change an existing user's role — requires direct DB
   access for now.
@@ -671,6 +849,9 @@ server cert. Read that note before touching DB SSL/connection config.
   filter/sort client-side for now.
 - **Single-instance rate limiting** (in-memory store).
 - **RDS cert not verified** (see SSL note above).
+- **Pending migration:** the `upload` table requires running
+  `npx prisma migrate dev --name add_uploads_table` against a live database
+  before the upload endpoints are functional.
 
 ---
 

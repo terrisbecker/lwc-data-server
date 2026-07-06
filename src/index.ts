@@ -5,6 +5,7 @@ import cors from "cors";
 import { pmnRouter } from "./pmn/pmn.routes";
 import { authRouter } from "./auth/auth.routes";
 import { usersRouter } from "./users/users.routes";
+import { uploadsRouter } from "./uploads/uploads.routes";
 import { rateLimiter, loginRateLimiter } from "./middleware/rate.limit";
 import { jwtAuth } from "./middleware/jwt.auth";
 import { errorHandler } from "./middleware/error.handler";
@@ -52,6 +53,7 @@ app.use("/auth", loginRateLimiter, authRouter);
 app.use("/api", rateLimiter, jwtAuth);
 app.use("/api/pmn", pmnRouter);
 app.use("/api/users", usersRouter);
+app.use("/api/uploads", uploadsRouter);
 
 // Central error handler — must be registered after all routes.
 app.use(errorHandler);
