@@ -12,5 +12,5 @@ export interface LocationSeed {
 }
 
 export const locations: LocationSeed[] = [
-  // { loc_name: "Example Site", latitude: 45.6, longitude: -122.4, description: "…" },
+  { loc_name: "Lacamas Lake Downstream", latitude: 45.6, longitude: -122.4, description: "…" },
 ];
