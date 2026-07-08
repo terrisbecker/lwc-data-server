@@ -15,6 +15,7 @@ export const ALLOWED_CONTENT_TYPES: Record<string, string> = {
   "image/png": "png",
   "image/webp": "webp",
   "image/gif": "gif",
+  "application/pdf": "pdf",
 };
 
 export const MAX_FILES = 10;
