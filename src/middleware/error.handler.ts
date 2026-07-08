@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { PmnServiceError } from "../pmn/pmn.service";
+import { WatershedServiceError } from "../watershed/watershed.service";
 import { AuthServiceError } from "../auth/auth.service";
 import { UsersServiceError } from "../users/users.service";
 
@@ -24,6 +25,7 @@ export function errorHandler(
 
   if (
     err instanceof PmnServiceError ||
+    err instanceof WatershedServiceError ||
     err instanceof AuthServiceError ||
     err instanceof UsersServiceError
   ) {

@@ -73,7 +73,6 @@ model locations {
 
 model phosphate_data {
   id                   String    @id @default(uuid()) @db.Uuid
-  lab_id               Int
   lab_case_file_number Int
   loc_id               String    @db.Uuid
   measurement_date     DateTime  @db.Date
@@ -84,6 +83,7 @@ model phosphate_data {
   unit                 String    @db.VarChar(50)
   notes                String?
   locations            locations @relation(fields: [loc_id], references: [loc_id], onDelete: NoAction, onUpdate: NoAction)
+  photos               String[]  @default([])
 
   @@schema("watershed_field_data")
 }

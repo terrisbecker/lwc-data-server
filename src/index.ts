@@ -3,6 +3,7 @@ import express, { type Request, type Response } from "express";
 import helmet from "helmet";
 import cors from "cors";
 import { pmnRouter } from "./pmn/pmn.routes";
+import { watershedRouter } from "./watershed/watershed.routes";
 import { authRouter } from "./auth/auth.routes";
 import { usersRouter } from "./users/users.routes";
 import { uploadsRouter } from "./uploads/uploads.routes";
@@ -52,6 +53,7 @@ app.use("/auth", loginRateLimiter, authRouter);
 // use requireRole() to enforce access levels beyond guest (unauthenticated GET).
 app.use("/api", rateLimiter, jwtAuth);
 app.use("/api/pmn", pmnRouter);
+app.use("/api/phosphate-data", watershedRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/uploads", uploadsRouter);
 

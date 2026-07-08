@@ -13,17 +13,21 @@ run the server locally.
 
 ## TL;DR for front-end / agent consumers
 
-- **Base URL:** `http://<host>:3001` (default port `3001`).
+- **Base URL:** `http://<host>:<PORT>`. The code default is `3000`, but the
+  bundled `.env`/`.env.example` set `PORT=3001`, so local examples use `3001`.
 - **Auth:** role-based JWT. Log in at `POST /auth/login` to get a token, then
   send it as `Authorization: Bearer <token>` on protected requests.
 - **Roles:** three levels — `guest` (unauthenticated), `volunteer`, `admin`.
   See the [permission table](#roles--permissions) for what each can do.
 - **CORS:** the browser origin must be in the server's allowlist
   (`CORS_ALLOWED_ORIGINS`). Ask whoever runs the server to add yours.
-- **PMN endpoints:** `GET`, `POST`, `PATCH`, and `DELETE` are all live under
-  `/api/pmn/combined-field-data` (and `…/:id` for the latter two).
+- **Data endpoints:** two datasets are served, each with full `GET`/`POST`/
+  `PATCH`/`DELETE`:
+  - **PMN** — `/api/pmn/combined-field-data` (cyanobacteria field data).
+  - **Phosphate** — `/api/phosphate-data` (watershed lab phosphate results, each
+    row joined to its sampling `location`).
 - **Image uploads:** volunteers and admins can upload up to 10 images at a time
-  via presigned S3 URLs — see [Image uploads](#image-uploads-apiunloads).
+  via presigned S3 URLs — see [Image uploads](#image-uploads-apiuploads).
 - **Health probe:** `GET /health` is public (no auth, no rate limit).
 - **Success shape:** `{ "data": <payload> }`. **Error shape:**
   `{ "error": { "message": "..." } }` (generic — never includes DB details).
@@ -185,6 +189,116 @@ Deletes a record by UUID.
 **Auth:** admin only (`Authorization: Bearer <token>`).
 
 **Response `204`:** no body.
+
+**Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
+does not match any row.
+
+---
+
+### `GET /api/phosphate-data`
+
+Returns **every row** of the `watershed_field_data.phosphate_data` table, each
+with its related sampling `location` joined in as a nested `locations` object (no
+pagination, filtering, or sorting yet — see [Roadmap](#roadmap--known-gaps)).
+
+**Auth:** none required (guest access).
+
+**Response `200`:**
+
+```json
+{
+  "data": [
+    {
+      "id": "b50a0722-0f82-489c-9b12-45825e07b949",
+      "lab_case_file_number": 1001,
+      "loc_id": "11111111-1111-1111-1111-111111111111",
+      "measurement_date": "2026-07-01T00:00:00.000Z",
+      "measurement_time": "1970-01-01T09:30:00.000Z",
+      "analysis_date": "2026-07-02T00:00:00.000Z",
+      "analyte_id": "PO4",
+      "analyte_level": 0.35,
+      "unit": "mg/L",
+      "notes": "Grab sample, north inlet.",
+      "photos": [],
+      "locations": {
+        "loc_id": "11111111-1111-1111-1111-111111111111",
+        "loc_name": "Lacamas Lake — North Inlet",
+        "latitude": 45.6,
+        "longitude": -122.4,
+        "description": "Inflow monitoring point."
+      }
+    }
+  ]
+}
+```
+
+Note: unlike the PMN table, `phosphate_data`'s numeric columns are Postgres
+`double precision` (Prisma `Float`), so `analyte_level`, `latitude`, and
+`longitude` come back as JSON **numbers**, not strings. `measurement_date` /
+`analysis_date` are `DATE` and `measurement_time` is `TIME` — same ISO-with-epoch
+serialization described in [Field types & gotchas](#field-types--gotchas). See the
+[field table](#watershed_field_dataphosphate_data-served-with-locations-joined).
+
+---
+
+### `POST /api/phosphate-data`
+
+Creates a new phosphate record. The database assigns the UUID — do not send `id`
+in the body.
+
+**Auth:** volunteer or admin (`Authorization: Bearer <token>`).
+
+**Body:** send a **flat `loc_id`** (the UUID of an existing `locations` row); the
+server maps it to the underlying relation. All other columns except `notes` and
+`photos` are required (`photos` defaults to `[]` when omitted).
+
+```json
+{
+  "loc_id": "11111111-1111-1111-1111-111111111111",
+  "lab_case_file_number": 1001,
+  "measurement_date": "2026-07-01T00:00:00.000Z",
+  "measurement_time": "1970-01-01T09:30:00.000Z",
+  "analysis_date": "2026-07-02T00:00:00.000Z",
+  "analyte_id": "PO4",
+  "analyte_level": 0.35,
+  "unit": "mg/L",
+  "notes": "Grab sample, north inlet.",
+  "photos": []
+}
+```
+
+**Response `201`:** the created record as `{ "data": { ... } }`.
+
+---
+
+### `PATCH /api/phosphate-data/:id`
+
+Partially updates an existing record. Only the fields present in the body are
+changed. To move the record to a different sampling site, include a flat
+`loc_id` — the server maps it to the relation.
+
+**Auth:** admin only (`Authorization: Bearer <token>`).
+
+**Response `200`:** the updated record as `{ "data": { ... } }`.
+
+**Response `400`:** `{ "error": { "message": "Invalid id" } }` if `:id` is not a
+valid UUID.
+
+**Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
+does not match any row.
+
+---
+
+### `DELETE /api/phosphate-data/:id`
+
+Deletes a phosphate record by UUID.
+
+**Auth:** admin only (`Authorization: Bearer <token>`).
+
+**Response `204`:** no body.
+
+**Response `400`:** `{ "error": { "message": "Invalid id" } }` if `:id` is not a
+valid UUID.
 
 **Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
 does not match any row.
@@ -366,7 +480,7 @@ assignment automatically.
 
 | Status | When | Body |
 | --- | --- | --- |
-| `400` | Missing required fields | `{ "error": { "message": "..." } }` |
+| `400` | Missing required fields, or a malformed UUID in the path (`PATCH`/`DELETE /:id`) | `{ "error": { "message": "Invalid id" } }` (or a field-specific message) |
 | `401` | No token, invalid/expired token, or wrong credentials | `{ "error": { "message": "Unauthorized" } }` |
 | `403` | Authenticated but insufficient role | `{ "error": { "message": "Forbidden" } }` |
 | `404` | Record or user not found | `{ "error": { "message": "..." } }` |
@@ -409,6 +523,15 @@ curl -X PATCH http://localhost:3001/api/pmn/combined-field-data/<id> \
 # DELETE (admin only)
 curl -X DELETE http://localhost:3001/api/pmn/combined-field-data/<id> \
   -H "Authorization: Bearer $TOKEN"
+
+# GET all phosphate records with locations joined — no token needed
+curl http://localhost:3001/api/phosphate-data
+
+# POST a phosphate record (volunteer or admin) — send a flat loc_id
+curl -X POST http://localhost:3001/api/phosphate-data \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"loc_id":"<location-uuid>","lab_case_file_number":1001,"measurement_date":"2026-07-01T00:00:00.000Z","measurement_time":"1970-01-01T09:30:00.000Z","analysis_date":"2026-07-02T00:00:00.000Z","analyte_id":"PO4","analyte_level":0.35,"unit":"mg/L","photos":[]}'
 
 # Create a new user (admin only)
 curl -X POST http://localhost:3001/api/users \
@@ -477,10 +600,12 @@ There are four Postgres schemas:
 All primary keys are UUIDs (`@db.Uuid`), generated by the database via
 `gen_random_uuid()`.
 
-> **Only `pmn_combined_field_data` is exposed as a data endpoint today** (plus
-> auth, user management, and image uploads). The `camas` and
-> `watershed_field_data` tables exist in the schema and have generated Prisma
-> types but no endpoints yet.
+> **Two data endpoints are served today:** `pmn_combined_field_data` (via
+> `/api/pmn/combined-field-data`) and `watershed_field_data.phosphate_data` (via
+> `/api/phosphate-data`, with `locations` joined) — plus auth, user management,
+> and image uploads. The `camas_city_data` table and the standalone `locations`
+> table exist in the schema with generated Prisma types but have no endpoints of
+> their own yet (`locations` is reachable only as a join on phosphate data).
 
 ### `pmn_combined_field_data` (the served table)
 
@@ -515,6 +640,28 @@ returns.
 | `general_comments` | string | Free text. |
 | `photos` | string[] | Array of photo URLs/paths. Defaults to `[]`. |
 
+### `watershed_field_data.phosphate_data` (served, with `locations` joined)
+
+Lab phosphate results returned by `GET /api/phosphate-data`. Every row is joined
+to its sampling site via `loc_id`, and the joined `locations` row is nested under
+a `locations` key in the response. Unlike the PMN table, the numeric columns here
+are `Float` (JSON numbers, not strings), and only `notes` is nullable.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | UUID (PK) | DB-generated. Do not send on POST. |
+| `lab_case_file_number` | int | Lab case/file number. |
+| `loc_id` | UUID (FK → `locations`) | Sampling site. On POST/PATCH, send as a **flat `loc_id`**. |
+| `measurement_date` | date | When the sample was taken. |
+| `measurement_time` | time | Time of day of the sample. |
+| `analysis_date` | date | When the lab ran the analysis. |
+| `analyte_id` | string(50) | Analyte code (e.g. `"PO4"`). |
+| `analyte_level` | float | Measured concentration (JSON number). |
+| `unit` | string(50) | Unit for `analyte_level` (e.g. `"mg/L"`). |
+| `notes` | string \| null | Free text. The only nullable column. |
+| `photos` | string[] | Array of photo URLs/paths. Defaults to `[]`. |
+| `locations` | object | Nested joined site — `loc_id`, `loc_name`, `latitude` (float), `longitude` (float), `description` (string \| null). |
+
 ### Other tables (not yet exposed as data endpoints)
 
 <details>
@@ -529,16 +676,10 @@ UUID PK `id`. Columns: `location`, `date`, `time`, `depth`, `temp_c`,
 <summary><code>watershed_field_data.locations</code> — sampling sites (schema: watershed_field_data)</summary>
 
 `loc_id` (UUID PK), `loc_name`, `latitude`, `longitude` (floats), `description`.
-Has a one-to-many relation to `phosphate_data`. Useful for mapping if/when
-exposed.
-</details>
-
-<details>
-<summary><code>watershed_field_data.phosphate_data</code> — lab phosphate results (schema: watershed_field_data)</summary>
-
-`id` (UUID PK), `lab_id`, `lab_case_file_number`, `loc_id` (UUID FK →
-`locations`), `measurement_date`, `measurement_time`, `analysis_date`,
-`analyte_id`, `analyte_level` (float), `unit`, `notes`.
+Has a one-to-many relation to `phosphate_data`. Not served on its own, but every
+row is reachable as the nested `locations` object on `GET /api/phosphate-data`.
+(`phosphate_data` itself **is** served — see the
+[field table above](#watershed_field_dataphosphate_data-served-with-locations-joined).)
 </details>
 
 <details>
@@ -611,7 +752,7 @@ helmet              security headers, strips X-Powered-By
  → jwtAuth          optional JWT extraction on /api — sets req.user if token valid;
                     passes through if no token (guest); 401 if token present but invalid
  → requireRole()    per-route guard — 401 unauthenticated, 403 insufficient role
- → feature routers  (/api/pmn, /api/users, /api/uploads)
+ → feature routers  (/api/pmn, /api/phosphate-data, /api/users, /api/uploads)
  → errorHandler     (last) logs full error, returns generic body
 ```
 
@@ -658,6 +799,11 @@ src/
     pmn.service.ts          service functions + PmnServiceError
     pmn.controller.ts       GET, POST, PATCH, DELETE handlers
     pmn.routes.ts           pmnRouter — GET public, POST volunteer+, PATCH/DELETE admin
+  watershed/                phosphate-data feature (locations joined on GET)
+    watershed.queries.ts    Prisma access — get (include locations) / create / update / delete
+    watershed.service.ts    service functions + WatershedServiceError
+    watershed.controller.ts GET, POST, PATCH, DELETE handlers (maps flat loc_id → relation)
+    watershed.routes.ts     watershedRouter — GET public, POST volunteer+, PATCH/DELETE admin
   uploads/                  image upload feature
     uploads.queries.ts      Prisma access — create batch, confirm, find by ID, list by user
     uploads.service.ts      presigned URL generation + UploadsServiceError
@@ -667,7 +813,7 @@ src/
 prisma/
   schema.prisma             DB models (4 schemas: pmn, camas, watershed_field_data, users)
   seed.ts                   idempotent seed: roles, permissions, role-permissions, admin user
-  migrations/0_init/        baseline migration SQL
+  migrations/                baseline (0_init) + incremental migrations (pmn photos, pmn UUIDs, uploads table, phosphate photos)
 generated/prisma/           Prisma client output (gitignored, generated by `prisma generate`)
 scripts/
   test-pmn-query.ts         standalone runner that hits the DB directly
@@ -839,8 +985,9 @@ server cert. Read that note before touching DB SSL/connection config.
 
 ## Roadmap / known gaps
 
-- **Limited data features exposed.** Only `pmn_combined_field_data` has data
-  endpoints. Camas, locations, and phosphate tables are modeled but not served.
+- **Limited data features exposed.** `pmn_combined_field_data` and
+  `phosphate_data` have data endpoints. The `camas_city_data` table and the
+  standalone `locations` table are modeled but not served on their own.
 - **No role reassignment.** A user's role is set at creation via `POST /api/users`.
   There is no endpoint to change an existing user's role — requires direct DB
   access for now.
@@ -849,9 +996,6 @@ server cert. Read that note before touching DB SSL/connection config.
   filter/sort client-side for now.
 - **Single-instance rate limiting** (in-memory store).
 - **RDS cert not verified** (see SSL note above).
-- **Pending migration:** the `upload` table requires running
-  `npx prisma migrate dev --name add_uploads_table` against a live database
-  before the upload endpoints are functional.
 
 ---
 
