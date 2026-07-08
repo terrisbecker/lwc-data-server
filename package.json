@@ -11,7 +11,8 @@
     "dev": "nodemon",
     "build": "npx tsc",
     "start": "node dist/src/index.js",
-    "seed": "npx prisma db seed"
+    "seed": "npx prisma db seed",
+    "seed:locations": "npx ts-node prisma/seed-locations.ts"
   },
   "prisma": {
     "seed": "npx ts-node prisma/seed.ts"
