@@ -354,16 +354,36 @@ security group in the AWS console instead of opening it with ufw.
 
 ## Updating the server
 
+Once the one-time setup above (steps 1–11: Node/PM2 install, `.env`,
+`pm2 startup`) is done, deploys are a single command from the repo root:
+
+```bash
+cd /home/ubuntu/lwc-data-server
+./scripts/deploy.sh          # add --seed to also re-run the seeder
+```
+
+`scripts/deploy.sh` runs the full flow — `git pull` (fast-forward `main`) →
+`npm ci` → `prisma generate` → `npm run build` → `prisma migrate deploy` →
+optional `npm run seed` (with `--seed`) → `npm prune --omit=dev` →
+`pm2 startOrReload ecosystem.config.js` → `pm2 save` → a `/health` check. It is
+idempotent and safe to re-run. PM2 process config lives in the committed
+`ecosystem.config.js`.
+
+<details>
+<summary>Equivalent manual steps</summary>
+
 ```bash
 cd /home/ubuntu/lwc-data-server
 git pull
 npm ci
 npx prisma generate
 npm run build
-npm prune --omit=dev        # optional: remove devDeps after build
 npx prisma migrate deploy   # only if there are new migrations
-pm2 restart lwc-data-server
+npm prune --omit=dev        # remove devDeps after build (and after any seed)
+pm2 startOrReload ecosystem.config.js
 ```
+
+</details>
 
 ---
 
