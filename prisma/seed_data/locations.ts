@@ -12,5 +12,11 @@ export interface LocationSeed {
 }
 
 export const locations: LocationSeed[] = [
-  { loc_name: "Lacamas Lake Downstream", latitude: 45.6, longitude: -122.4, description: "…" },
+  { loc_name: "Lacamas Creek Downstream", latitude: 45.678819, longitude: -122.476816, description: "Goodwin Rd." },
+  { loc_name: "Matney Creek Upstream", latitude: 45.651228, longitude: -122.409154, description: "Road off NE 3rd St." },
+  { loc_name: "Matney Creek Downstream", latitude: 45.661929, longitude: -122.423671, description: "Road off NE 53rd St." },
+  { loc_name: "Shanghai Creek", latitude: 45.686647, longitude: -122.416607, description: "NE 202nd Ave." },
+  { loc_name: "Fifth Plain Creek", latitude: 45.685548, longitude: -122.492993, description: "NE 88th St." },
+  { loc_name: "China Ditch", latitude: 45.695101, longitude: -122.495713, description: "NE Ward Rd. (6 - revised sample site)" },
+  { loc_name: "Lacamas Creek Upstream", latitude: 45.671443, longitude: -122.488076, description: "NE Fourth Plain Rd." },
 ];
