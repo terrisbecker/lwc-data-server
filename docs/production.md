@@ -352,6 +352,89 @@ security group in the AWS console instead of opening it with ufw.
 
 ---
 
+## 14. Add TLS with certbot (Let's Encrypt)
+
+With nginx already terminating traffic on port 80, certbot's nginx plugin can
+issue a free Let's Encrypt certificate and rewrite the site config to serve HTTPS
+on 443 — no changes to the Node app. The nginx config from step 12 already sets
+`X-Forwarded-Proto $scheme`, so Express sees the real scheme once TLS is on.
+
+### Prerequisites
+
+- **A DNS A record** for your domain (e.g. `api.your-domain.com`) pointing at the
+  EC2 public IP. Use an Elastic IP so it survives instance reboots. Certbot's
+  default HTTP-01 challenge requires Let's Encrypt to reach the server by name
+  over the public internet.
+- **Port 443 open in the EC2 security group** (AWS console): inbound TCP 443 from
+  `0.0.0.0/0`, or from the ALB's security group if one is in front.
+- **`server_name` set to the real domain** in the nginx config — certbot edits the
+  `server` block matching your domain, so it must be the actual hostname, not `_`:
+
+  ```bash
+  sudo nano /etc/nginx/sites-available/lwc-data-server   # server_name api.your-domain.com;
+  sudo nginx -t && sudo systemctl reload nginx
+  ```
+
+### Install certbot and obtain the certificate
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+
+# Obtains the cert AND edits the nginx config for TLS in one step
+sudo certbot --nginx -d api.your-domain.com --redirect -m you@example.com --agree-tos --no-eff-email
+```
+
+`--nginx` solves the HTTP-01 challenge on port 80, adds `listen 443 ssl;` and the
+`ssl_certificate` lines (pointing at `/etc/letsencrypt/live/api.your-domain.com/`)
+to the `server` block, and reloads nginx itself. `--redirect` adds a 301 from
+port 80 → 443.
+
+### Update the firewall for 443
+
+Swap the port-80-only rule from step 13 for `Nginx Full` (opens 80 **and** 443).
+Keep port 80 open — Let's Encrypt uses it for the HTTP→HTTPS redirect and for
+renewals.
+
+```bash
+sudo ufw allow 'Nginx Full'
+sudo ufw delete allow 'Nginx HTTP'
+sudo ufw status
+```
+
+### App-side follow-ups
+
+- **`CORS_ALLOWED_ORIGINS`** — make sure the frontend origin is `https://…`, then
+  `pm2 reload lwc-data-server`.
+- **`TRUST_PROXY=1`** is already correct — nginx forwards `X-Forwarded-Proto https`,
+  so the rate limiter and IP-based logic read the real scheme and client IP.
+- The Node app keeps listening on plain HTTP on `127.0.0.1:3001` — intentional.
+  TLS terminates at nginx; the loopback hop stays unencrypted.
+
+### Verify
+
+```bash
+curl https://api.your-domain.com/health     # health JSON
+curl -I http://api.your-domain.com/health    # 301 → https
+```
+
+### Auto-renewal
+
+The certbot package installs a systemd timer that renews certs (~60 days in)
+automatically. Confirm it and dry-run a renewal:
+
+```bash
+systemctl list-timers | grep certbot
+sudo certbot renew --dry-run
+```
+
+> **Behind an AWS ALB?** Skip certbot and terminate TLS at the ALB with a free
+> auto-renewing ACM certificate, forwarding plain HTTP to nginx. Set
+> `TRUST_PROXY=2` (ALB + nginx hops). For a wildcard cert or to avoid exposing
+> port 80, use certbot's DNS-01 challenge instead
+> (`python3-certbot-dns-route53` with `--dns-route53`).
+
+---
+
 ## Updating the server
 
 Once the one-time setup above (steps 1–11: Node/PM2 install, `.env`,
