@@ -385,20 +385,27 @@ skipped.
 
 #### `GET /api/uploads/:id/url`
 
-Get a short-lived presigned S3 GET URL for a single upload. Only the upload's
-owner can request its URL.
+Get a short-lived presigned S3 GET URL for a single upload, plus its content type
+and original filename. Any volunteer or admin can request any upload's URL (e.g.
+to view photos attached to another volunteer's record).
 
 **Auth:** volunteer or admin.
 
 **Response `200`:**
 ```json
-{ "data": { "url": "https://s3.amazonaws.com/..." } }
+{
+  "data": {
+    "url": "https://s3.amazonaws.com/...",
+    "contentType": "image/jpeg",
+    "originalName": "sample-1.jpg"
+  }
+}
 ```
 
 The URL expires in **15 minutes**. It carries an `inline` content-disposition
 header so browsers render the image directly rather than downloading it.
 
-**Response `404`:** upload not found or belongs to another user.
+**Response `404`:** upload not found.
 
 ---
 

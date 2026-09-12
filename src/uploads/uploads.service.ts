@@ -96,18 +96,26 @@ export async function confirmUploads(userId: string, uploadIds: string[]): Promi
   }
 }
 
-export async function getPresignedGetUrl(userId: string, uploadId: string): Promise<string> {
+export interface PresignedGetResult {
+  url: string;
+  contentType: string;
+  originalName: string;
+}
+
+// Any volunteer/admin may view any upload (photos are shared record attachments), so
+// there is no ownership check — the route's requireRole("volunteer") is the gate.
+export async function getPresignedGetUrl(uploadId: string): Promise<PresignedGetResult | null> {
   try {
     const record = await findUploadById(uploadId);
-    if (!record) return "";
-    if (record.user_id !== userId) return "";
+    if (!record) return null;
 
     const command = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: record.object_key,
       ResponseContentDisposition: `inline; filename="${record.original_name}"`,
     });
-    return getSignedUrl(s3, command, { expiresIn: GET_EXPIRY_SECONDS });
+    const url = await getSignedUrl(s3, command, { expiresIn: GET_EXPIRY_SECONDS });
+    return { url, contentType: record.content_type, originalName: record.original_name };
   } catch (cause) {
     throw new UploadsServiceError("Failed to generate presigned download URL", cause);
   }

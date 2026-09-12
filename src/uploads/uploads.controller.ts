@@ -101,12 +101,12 @@ export async function handleGetPresignedGetUrl(
   }
 
   try {
-    const url = await getPresignedGetUrl(req.user!.id, req.params.id as string);
-    if (!url) {
+    const data = await getPresignedGetUrl(req.params.id as string);
+    if (!data) {
       res.status(404).json({ error: { message: "Upload not found" } });
       return;
     }
-    res.json({ data: { url } });
+    res.json({ data });
   } catch (err) {
     next(err);
   }
