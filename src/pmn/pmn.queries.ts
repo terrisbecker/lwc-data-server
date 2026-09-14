@@ -2,8 +2,27 @@ import { prisma } from "../db";
 import { Prisma } from "../../generated/prisma/client";
 import type { pmn_combined_field_data } from "../../generated/prisma/client";
 
-export async function getAllCombinedFieldData(): Promise<pmn_combined_field_data[]> {
-  return prisma.pmn_combined_field_data.findMany();
+export async function getAllCombinedFieldData(
+  hasScum?: boolean,
+): Promise<pmn_combined_field_data[]> {
+  return prisma.pmn_combined_field_data.findMany({
+    where: hasScum === undefined ? undefined : { has_scum: hasScum },
+  });
+}
+
+export async function findCombinedFieldDataById(
+  id: string,
+): Promise<pmn_combined_field_data | null> {
+  return prisma.pmn_combined_field_data.findUnique({ where: { id } });
+}
+
+// True if any PMN record lists this upload as a scum photo — the gate for public access.
+export async function isReferencedAsScumPhoto(uploadId: string): Promise<boolean> {
+  const row = await prisma.pmn_combined_field_data.findFirst({
+    where: { scum_photos: { has: uploadId } },
+    select: { id: true },
+  });
+  return row !== null;
 }
 
 export async function createCombinedFieldData(
