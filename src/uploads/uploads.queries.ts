@@ -20,6 +20,15 @@ export async function findUploadById(id: string): Promise<upload | null> {
   return prisma.upload.findUnique({ where: { id } });
 }
 
+export async function findConfirmedUploadsByIds(
+  ids: string[],
+): Promise<Pick<upload, "id" | "content_type">[]> {
+  return prisma.upload.findMany({
+    where: { id: { in: ids }, status: "confirmed" },
+    select: { id: true, content_type: true },
+  });
+}
+
 export async function findUploadsByUser(userId: string): Promise<upload[]> {
   return prisma.upload.findMany({
     where: { user_id: userId, status: "confirmed" },

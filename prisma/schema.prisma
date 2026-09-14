@@ -34,6 +34,8 @@ model pmn_combined_field_data {
   secchi                 Decimal?  @db.Decimal
   general_comments       String?
   photos                 String[]  @default([])
+  has_scum               Boolean   @default(false)
+  scum_photos            String[]  @default([])
 
   @@schema("pmn")
 }
