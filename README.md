@@ -28,6 +28,10 @@ run the server locally.
     row joined to its sampling `location`).
 - **Image uploads:** volunteers and admins can upload up to 10 images at a time
   via presigned S3 URLs — see [Image uploads](#image-uploads-apiuploads).
+- **Scum photos (PMN):** PMN records can be flagged `has_scum` and carry
+  `scum_photos` (upload ids). Scum photos are **publicly viewable** (no login) via
+  [`GET /api/pmn/scum-photos/:uploadId/url`](#get-apipmnscum-photosuploadidurl) —
+  the one exception to volunteer-only upload access.
 - **Health probe:** `GET /health` is public (no auth, no rate limit).
 - **Success shape:** `{ "data": <payload> }`. **Error shape:**
   `{ "error": { "message": "..." } }` (generic — never includes DB details).
@@ -48,6 +52,8 @@ run the server locally.
 | **admin** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Guests need no credentials — unauthenticated GET requests are always allowed.
+Guests cannot view uploaded images in general, but they **can** view PMN scum
+photos (see [`GET /api/pmn/scum-photos/:uploadId/url`](#get-apipmnscum-photosuploadidurl)).
 Volunteers and admins authenticate via `POST /auth/login` and send the returned
 JWT as a Bearer token.
 
@@ -96,10 +102,19 @@ Public, unauthenticated, not rate-limited. Intended for load-balancer probes.
 
 ### `GET /api/pmn/combined-field-data`
 
-Returns **every row** of the `pmn_combined_field_data` table (no pagination,
-filtering, or sorting yet — see [Roadmap](#roadmap--known-gaps)).
+Returns every row of the `pmn_combined_field_data` table (no pagination or
+sorting yet — see [Roadmap](#roadmap--known-gaps)).
 
 **Auth:** none required (guest access).
+
+**Query parameters:**
+
+| Param | Values | Effect |
+| --- | --- | --- |
+| `hasScum` | `true` \| `false` | Optional. Return only records whose `has_scum` matches. Omit to return all rows. |
+
+**Response `400`:** `{ "error": { "message": "hasScum must be true or false" } }`
+for any other `hasScum` value.
 
 **Response `200`:**
 
@@ -130,13 +145,15 @@ filtering, or sorting yet — see [Roadmap](#roadmap--known-gaps)).
       "woronichinia": "None",
       "secchi": "1.8",
       "general_comments": "Calm conditions, good visibility.",
-      "photos": []
+      "photos": [],
+      "has_scum": false,
+      "scum_photos": []
     }
   ]
 }
 ```
 
-Every field except `id` may be `null`. Treat all measurement fields as nullable
+Every field except `id` and `has_scum` may be `null`. Treat all measurement fields as nullable
 in the UI. See the [field table](#pmn_combined_field_data-the-served-table) for
 types and meaning.
 
@@ -150,7 +167,8 @@ body.
 **Auth:** volunteer or admin (`Authorization: Bearer <token>`).
 
 **Body:** any subset of the fields in the table (all are optional — an empty
-`{}` is valid; all nullable fields default to `null`, `photos` defaults to `[]`).
+`{}` is valid; all nullable fields default to `null`, `photos` and `scum_photos`
+default to `[]`, `has_scum` defaults to `false`).
 
 ```json
 {
@@ -164,6 +182,25 @@ body.
 
 **Response `201`:** the created record as `{ "data": { ... } }`.
 
+**Response `400`:** a scum validation error (see [Scum rules](#scum-rules)), e.g.
+`{ "error": { "message": "Every scum photo must be a confirmed image upload" } }`.
+
+#### Scum rules
+
+`has_scum` and `scum_photos` are validated on POST and PATCH. Violations return
+`400` with a descriptive message:
+
+- `has_scum` must be a boolean.
+- `scum_photos` must be an array of upload UUIDs, at most **10** per record.
+- A non-empty `scum_photos` means `has_scum` is `true`. If you omit `has_scum`,
+  the server sets it to `true` for you; sending `has_scum: false` alongside scum
+  photos is rejected.
+- `has_scum: true` with no photos is allowed (scum seen, no photo taken).
+- An upload id cannot appear in both `photos` and `scum_photos`.
+- Every scum photo must be a **confirmed** `image/*` upload (upload it through
+  [`/api/uploads`](#image-uploads-apiuploads) and confirm it first). Adding an id
+  to `scum_photos` makes that image **publicly viewable**.
+
 ---
 
 ### `PATCH /api/pmn/combined-field-data/:id`
@@ -175,7 +212,13 @@ changed; omitted fields are left as-is.
 
 **Body:** any subset of mutable fields.
 
+The [scum rules](#scum-rules) are checked against the record **after** the patch
+is applied. So `{ "has_scum": false }` on its own fails while the record still has
+scum photos. To clear scum, send `{ "has_scum": false, "scum_photos": [] }`.
+
 **Response `200`:** the updated record as `{ "data": { ... } }`.
+
+**Response `400`:** a scum validation error.
 
 **Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
 does not match any row.
@@ -192,6 +235,40 @@ Deletes a record by UUID.
 
 **Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
 does not match any row.
+
+---
+
+### `GET /api/pmn/scum-photos/:uploadId/url`
+
+Public. Gets a short-lived presigned S3 GET URL for a scum photo, so the front end
+can show scum photos to users who are not logged in.
+
+**Auth:** none required (guest access).
+
+The URL is only issued while at least one PMN record lists `uploadId` in its
+`scum_photos`. Once no record references it (e.g. an admin clears the scum
+photos), this endpoint returns `404` again. For any other image, use the
+authenticated [`GET /api/uploads/:id/url`](#get-apiuploadsidurl).
+
+**Response `200`:** same shape as `GET /api/uploads/:id/url`:
+```json
+{
+  "data": {
+    "url": "https://s3.amazonaws.com/...",
+    "contentType": "image/jpeg",
+    "originalName": "scum.jpg"
+  }
+}
+```
+
+The URL expires in **15 minutes**.
+
+**Response `400`:** `{ "error": { "message": "Invalid id" } }` if `:uploadId` is
+not a valid UUID.
+
+**Response `404`:** `{ "error": { "message": "Scum photo not found" } }`. This is
+returned both for ids that don't exist and for uploads that aren't scum photos,
+so the endpoint doesn't reveal which upload ids exist.
 
 ---
 
@@ -307,7 +384,9 @@ does not match any row.
 
 ### Image uploads (`/api/uploads`)
 
-All upload endpoints require at minimum a volunteer JWT.
+All upload endpoints require at minimum a volunteer JWT. (Exception: PMN scum
+photos can be viewed publicly through
+[`GET /api/pmn/scum-photos/:uploadId/url`](#get-apipmnscum-photosuploadidurl).)
 
 #### `POST /api/uploads/presigned-urls`
 
@@ -487,7 +566,7 @@ assignment automatically.
 
 | Status | When | Body |
 | --- | --- | --- |
-| `400` | Missing required fields, or a malformed UUID in the path (`PATCH`/`DELETE /:id`) | `{ "error": { "message": "Invalid id" } }` (or a field-specific message) |
+| `400` | Missing required fields, a malformed UUID in the path, an invalid query param (`hasScum`), or a PMN scum-rule violation | `{ "error": { "message": "Invalid id" } }` (or a field-specific message) |
 | `401` | No token, invalid/expired token, or wrong credentials | `{ "error": { "message": "Unauthorized" } }` |
 | `403` | Authenticated but insufficient role | `{ "error": { "message": "Forbidden" } }` |
 | `404` | Record or user not found | `{ "error": { "message": "..." } }` |
@@ -574,6 +653,25 @@ curl http://localhost:3001/api/uploads/$UPLOAD_ID/url \
 # List your uploads
 curl http://localhost:3001/api/uploads \
   -H "Authorization: Bearer $TOKEN"
+
+# Create a PMN record with a scum photo (has_scum is set to true automatically)
+curl -X POST http://localhost:3001/api/pmn/combined-field-data \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"sampling_site\":\"North Cove\",\"scum_photos\":[\"$UPLOAD_ID\"]}"
+
+# Only records flagged with scum — no token needed
+curl "http://localhost:3001/api/pmn/combined-field-data?hasScum=true"
+
+# Public scum photo URL — no token needed
+curl http://localhost:3001/api/pmn/scum-photos/$UPLOAD_ID/url
+```
+
+For a full end-to-end check of scum photos against `npm run dev` (needs a seeded
+admin, S3 credentials, and `jq`):
+
+```bash
+ADMIN_EMAIL=... ADMIN_PASSWORD=... ./scripts/test-scum-photos.sh [path/to/photo.jpg]
 ```
 
 ---
@@ -646,6 +744,8 @@ returns.
 | `secchi` | decimal | Secchi-disk depth (water clarity). |
 | `general_comments` | string | Free text. |
 | `photos` | string[] | Array of photo URLs/paths. Defaults to `[]`. |
+| `has_scum` | boolean | Scum (toxic algae) observed. Not nullable; defaults to `false`. Always `true` when `scum_photos` is non-empty. |
+| `scum_photos` | string[] | Upload ids (`users.upload`) of scum photos. Defaults to `[]`. Max 10, confirmed images only, and none may also be in `photos`. **Publicly viewable** via `GET /api/pmn/scum-photos/:uploadId/url`. |
 
 ### `watershed_field_data.phosphate_data` (served, with `locations` joined)
 
@@ -722,8 +822,8 @@ These matter when binding the JSON to a UI:
   Use only the date portion; ignore the time half.
 - **`TIME` → ISO string on the epoch date.** e.g. `"1970-01-01T09:30:00.000Z"`.
   Use only the time portion; ignore the `1970-01-01` date half.
-- **Nearly everything is nullable.** Only `id` is guaranteed present in the
-  combined table. Guard every field.
+- **Nearly everything is nullable.** Only `id` and `has_scum` are guaranteed
+  present in the combined table. Guard every field.
 - **Free-text fields are uncontrolled.** Weather, wind, comments, and the
   cyanobacteria genus columns have no fixed enum — render defensively.
 - **One misspelled column:** `barometeric_pressure` (sic) — kept verbatim to
@@ -802,17 +902,17 @@ src/
     users.controller.ts     GET / POST / PATCH / DELETE handlers
     users.routes.ts         usersRouter (all routes wrapped in requireRole("admin"))
   pmn/                      reference feature
-    pmn.queries.ts          Prisma access — get / create / update / delete
-    pmn.service.ts          service functions + PmnServiceError
-    pmn.controller.ts       GET, POST, PATCH, DELETE handlers
-    pmn.routes.ts           pmnRouter — GET public, POST volunteer+, PATCH/DELETE admin
+    pmn.queries.ts          Prisma access — get (optional hasScum filter) / find by id / create / update / delete / scum-photo reference check
+    pmn.service.ts          service functions, scum validation, PmnServiceError + PmnValidationError (400)
+    pmn.controller.ts       GET, POST, PATCH, DELETE handlers + public scum photo URL handler
+    pmn.routes.ts           pmnRouter — GET public, POST volunteer+, PATCH/DELETE admin, GET /scum-photos/:uploadId/url public
   watershed/                phosphate-data feature (locations joined on GET)
     watershed.queries.ts    Prisma access — get (include locations) / create / update / delete
     watershed.service.ts    service functions + WatershedServiceError
     watershed.controller.ts GET, POST, PATCH, DELETE handlers (maps flat loc_id → relation)
     watershed.routes.ts     watershedRouter — GET public, POST volunteer+, PATCH/DELETE admin
   uploads/                  image upload feature
-    uploads.queries.ts      Prisma access — create batch, confirm, find by ID, list by user
+    uploads.queries.ts      Prisma access — create batch, confirm, find by ID, find confirmed by IDs, list by user
     uploads.service.ts      presigned URL generation + UploadsServiceError
     uploads.controller.ts   POST /presigned-urls, POST /confirm, GET /:id/url, GET /
     uploads.routes.ts       uploadsRouter — all routes require volunteer+
@@ -820,11 +920,12 @@ src/
 prisma/
   schema.prisma             DB models (4 schemas: pmn, camas, watershed_field_data, users)
   seed.ts                   idempotent seed: roles, permissions, role-permissions, admin user
-  migrations/                baseline (0_init) + incremental migrations (pmn photos, pmn UUIDs, uploads table, phosphate photos)
+  migrations/                baseline (0_init) + incremental migrations (pmn photos, pmn UUIDs, uploads table, phosphate photos, pmn scum)
 generated/prisma/           Prisma client output (gitignored, generated by `prisma generate`)
 scripts/
   test-pmn-query.ts         standalone runner that hits the DB directly
   test-query.sh             wrapper that runs the above
+  test-scum-photos.sh       end-to-end HTTP smoke test for PMN scum photos (needs running server, S3, jq)
 prisma.config.ts            Prisma CLI config (schema, datasource URL, seed command)
 nodemon.json                dev runner (ts-node on src)
 tsconfig.json               TS config (target ES2020, CommonJS, ts-node: { files: true })
@@ -998,9 +1099,9 @@ server cert. Read that note before touching DB SSL/connection config.
 - **No role reassignment.** A user's role is set at creation via `POST /api/users`.
   There is no endpoint to change an existing user's role — requires direct DB
   access for now.
-- **No pagination, filtering, or sorting** — `GET /api/pmn/combined-field-data`
-  returns the whole table every call. Front-ends should expect to fetch once and
-  filter/sort client-side for now.
+- **No pagination or sorting, and little filtering.** `GET /api/pmn/combined-field-data`
+  returns the whole table on every call. The only filter is `hasScum`. Front ends
+  should fetch once and filter or sort in the browser for now.
 - **Single-instance rate limiting** (in-memory store).
 - **RDS cert not verified** (see SSL note above).
 
