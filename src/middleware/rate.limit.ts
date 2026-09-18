@@ -1,8 +1,10 @@
 import rateLimit from "express-rate-limit";
 import type { Request, Response } from "express";
+import { TooManyRequestsError } from "../http/api.error";
+import { fail } from "../http/respond";
 
-const tooManyRequests = (_req: Request, res: Response) =>
-  res.status(429).json({ error: { message: "Too many requests" } });
+const tooManyRequests = (req: Request, res: Response) =>
+  fail(res, new TooManyRequestsError("Too many requests"), req.requestId);
 
 // General API rate limiter. Uses in-memory store — fine for a single instance;
 // a multi-instance deployment needs a shared store (e.g. Redis).

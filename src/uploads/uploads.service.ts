@@ -9,6 +9,8 @@ import {
   findUploadById,
   findUploadsByUser,
 } from "./uploads.queries";
+import { InternalError } from "../http/api.error";
+import { ErrorCodes, type ErrorCode } from "../http/error.codes";
 
 export const ALLOWED_CONTENT_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -21,16 +23,19 @@ export const ALLOWED_CONTENT_TYPES: Record<string, string> = {
 export const MAX_FILES = 10;
 export const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 
-const PUT_EXPIRY_SECONDS = 300; // 5 min
-const GET_EXPIRY_SECONDS = 900; // 15 min
+export const PUT_EXPIRY_SECONDS = 300; // 5 min
+export const GET_EXPIRY_SECONDS = 900; // 15 min
 
-export class UploadsServiceError extends Error {
-  readonly cause?: unknown;
-
-  constructor(message: string, cause?: unknown) {
-    super(message);
+// `message` names the failed operation for the log; the client sees publicMessage.
+export class UploadsServiceError extends InternalError {
+  constructor(
+    message: string,
+    cause?: unknown,
+    code: ErrorCode = ErrorCodes.UPLOADS_LIST_FAILED,
+    publicMessage = "The request could not be completed.",
+  ) {
+    super(message, { code, publicMessage, cause });
     this.name = "UploadsServiceError";
-    this.cause = cause;
   }
 }
 
@@ -84,15 +89,27 @@ export async function generatePresignedPutUrls(
       }),
     );
   } catch (cause) {
-    throw new UploadsServiceError("Failed to generate presigned upload URLs", cause);
+    throw new UploadsServiceError(
+      "Failed to generate presigned upload URLs",
+      cause,
+      ErrorCodes.UPLOADS_PRESIGN_FAILED,
+      "Upload URLs could not be issued. Please try again.",
+    );
   }
 }
 
 export async function confirmUploads(userId: string, uploadIds: string[]): Promise<number> {
   try {
-    return confirmUploadRecords(uploadIds, userId);
+    // Must be awaited inside the try — a bare `return` of the promise escapes
+    // this catch, so the rejection reached the error handler unwrapped.
+    return await confirmUploadRecords(uploadIds, userId);
   } catch (cause) {
-    throw new UploadsServiceError("Failed to confirm uploads", cause);
+    throw new UploadsServiceError(
+      "Failed to confirm uploads",
+      cause,
+      ErrorCodes.UPLOADS_CONFIRM_FAILED,
+      "The uploads could not be confirmed. Please try again.",
+    );
   }
 }
 
@@ -117,14 +134,25 @@ export async function getPresignedGetUrl(uploadId: string): Promise<PresignedGet
     const url = await getSignedUrl(s3, command, { expiresIn: GET_EXPIRY_SECONDS });
     return { url, contentType: record.content_type, originalName: record.original_name };
   } catch (cause) {
-    throw new UploadsServiceError("Failed to generate presigned download URL", cause);
+    throw new UploadsServiceError(
+      "Failed to generate presigned download URL",
+      cause,
+      ErrorCodes.UPLOADS_DOWNLOAD_URL_FAILED,
+      "The download URL could not be issued. Please try again.",
+    );
   }
 }
 
 export async function listUserUploads(userId: string): Promise<upload[]> {
   try {
-    return findUploadsByUser(userId);
+    // Awaited for the same reason as confirmUploads above.
+    return await findUploadsByUser(userId);
   } catch (cause) {
-    throw new UploadsServiceError("Failed to list uploads", cause);
+    throw new UploadsServiceError(
+      "Failed to list uploads",
+      cause,
+      ErrorCodes.UPLOADS_LIST_FAILED,
+      "Your uploads could not be retrieved.",
+    );
   }
 }

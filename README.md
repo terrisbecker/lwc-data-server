@@ -33,8 +33,20 @@ run the server locally.
   [`GET /api/pmn/scum-photos/:uploadId/url`](#get-apipmnscum-photosuploadidurl) —
   the one exception to volunteer-only upload access.
 - **Health probe:** `GET /health` is public (no auth, no rate limit).
-- **Success shape:** `{ "data": <payload> }`. **Error shape:**
-  `{ "error": { "message": "..." } }` (generic — never includes DB details).
+- **Success shape:** `{ "data": <payload>, "message"?: "...", "meta"?: { ... } }`.
+  **Error shape:** `{ "error": { "message": "...", "code": "...", "details"?: ...,
+  "requestId": "..." } }`. `data` and `error.message` are unchanged from earlier
+  versions; `message`, `meta`, `code` and `details` were added alongside them, so
+  existing clients keep working. **New clients should branch on `error.code`**, not
+  on the message text — see [Error codes](#error-codes). Error bodies never include
+  DB details, SQL, or stack traces.
+- **Request ids:** every response carries an `X-Request-Id` header, and every error
+  body repeats it as `error.requestId`. Quote it when reporting a `500` — it is the
+  key to the matching server-side log entry. Clients may supply their own via the
+  same header; it is honored only if it matches `[A-Za-z0-9_-]{8,64}`.
+- **`GET /health` is the one un-enveloped response** — it returns
+  `{ "status", "uptime", "timestamp" }` directly so load-balancer probes and
+  monitors can parse it without unwrapping.
 - **Numbers come back as strings.** PostgreSQL `DECIMAL` columns serialize as
   JSON strings (e.g. `"7.40"`), not numbers. Parse them client-side.
 - **Dates/times are ISO timestamps.** `DATE` and `TIME` columns serialize as full
@@ -80,9 +92,18 @@ Public. Exchange email + password for a JWT.
 }
 ```
 
-**Response `401`:** `{ "error": { "message": "Invalid email or password" } }`
+**Response `200`** also carries `"message": "Signed in."`.
 
-**Response `403`:** `{ "error": { "message": "Account is inactive" } }`
+**Response `400`:** `MISSING_FIELD` —
+`{ "error": { "message": "email and password are required", ... } }`
+
+**Response `401`:** `INVALID_CREDENTIALS` —
+`{ "error": { "message": "Invalid email or password", ... } }`. Returned
+identically for an unknown email and a wrong password, so the endpoint cannot be
+used to discover which addresses are registered.
+
+**Response `403`:** `ACCOUNT_INACTIVE` —
+`{ "error": { "message": "Account is inactive", ... } }`
 
 ---
 
@@ -113,8 +134,13 @@ sorting yet — see [Roadmap](#roadmap--known-gaps)).
 | --- | --- | --- |
 | `hasScum` | `true` \| `false` | Optional. Return only records whose `has_scum` matches. Omit to return all rows. |
 
-**Response `400`:** `{ "error": { "message": "hasScum must be true or false" } }`
-for any other `hasScum` value.
+**Response `400`:** `INVALID_FIELD` —
+`{ "error": { "message": "hasScum must be true or false", ... } }` for any other
+`hasScum` value.
+
+**Response `200`** also carries `"message": "Retrieved PMN combined field data."`
+and `"meta": { "count": <n> }`, plus `"meta".filters.hasScum` when the filter is
+applied.
 
 **Response `200`:**
 
@@ -180,10 +206,13 @@ default to `[]`, `has_scum` defaults to `false`).
 }
 ```
 
-**Response `201`:** the created record as `{ "data": { ... } }`.
+**Response `201`:** the created record as `{ "data": { ... } }`,
+with `"message": "PMN record created."` and `"meta": { "id": "<uuid>" }`.
 
-**Response `400`:** a scum validation error (see [Scum rules](#scum-rules)), e.g.
-`{ "error": { "message": "Every scum photo must be a confirmed image upload" } }`.
+**Response `400`:** `PMN_SCUM_RULE_VIOLATION` — a scum validation error (see
+[Scum rules](#scum-rules)), e.g.
+`{ "error": { "message": "Every scum photo must be a confirmed image upload", ... } }`.
+`details.field` names the offending field.
 
 #### Scum rules
 
@@ -216,11 +245,12 @@ The [scum rules](#scum-rules) are checked against the record **after** the patch
 is applied. So `{ "has_scum": false }` on its own fails while the record still has
 scum photos. To clear scum, send `{ "has_scum": false, "scum_photos": [] }`.
 
-**Response `200`:** the updated record as `{ "data": { ... } }`.
+**Response `200`:** the updated record as `{ "data": { ... } }`,
+with `"message": "PMN record updated."` and `"meta": { "id": "<uuid>" }`.
 
-**Response `400`:** a scum validation error.
+**Response `400`:** `PMN_SCUM_RULE_VIOLATION` — a scum validation error.
 
-**Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
+**Response `404`:** `PMN_RECORD_NOT_FOUND` — `{ "error": { "message": "Record not found", ... } }` if `id`
 does not match any row.
 
 ---
@@ -233,7 +263,7 @@ Deletes a record by UUID.
 
 **Response `204`:** no body.
 
-**Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
+**Response `404`:** `PMN_RECORD_NOT_FOUND` — `{ "error": { "message": "Record not found", ... } }` if `id`
 does not match any row.
 
 ---
@@ -250,7 +280,8 @@ The URL is only issued while at least one PMN record lists `uploadId` in its
 photos), this endpoint returns `404` again. For any other image, use the
 authenticated [`GET /api/uploads/:id/url`](#get-apiuploadsidurl).
 
-**Response `200`:** same shape as `GET /api/uploads/:id/url`:
+**Response `200`:** same shape as `GET /api/uploads/:id/url`, plus
+`"message": "Scum photo URL issued."` and `"meta": { "expiresInSeconds": 900 }`:
 ```json
 {
   "data": {
@@ -263,10 +294,12 @@ authenticated [`GET /api/uploads/:id/url`](#get-apiuploadsidurl).
 
 The URL expires in **15 minutes**.
 
-**Response `400`:** `{ "error": { "message": "Invalid id" } }` if `:uploadId` is
+**Response `400`:** `INVALID_ID` — `{ "error": { "message": "Invalid id", ... } }` if `:uploadId` is
 not a valid UUID.
 
-**Response `404`:** `{ "error": { "message": "Scum photo not found" } }`. This is
+**Response `404`:** `PMN_SCUM_PHOTO_NOT_FOUND` — `{ "error": { "message": "Scum photo not found", ... } }`,
+with no `details` (an unknown upload and a non-scum upload are deliberately
+indistinguishable). This is
 returned both for ids that don't exist and for uploads that aren't scum photos,
 so the endpoint doesn't reveal which upload ids exist.
 
@@ -344,7 +377,13 @@ server maps it to the underlying relation. All other columns except `notes` and
 }
 ```
 
-**Response `201`:** the created record as `{ "data": { ... } }`.
+**Response `201`:** the created record as `{ "data": { ... } }`,
+with `"message": "Phosphate record created."` and `"meta": { "id": "<uuid>" }`.
+
+**Response `400`:** `MISSING_FIELD` if `loc_id` is absent, `INVALID_ID` if it is
+not a UUID, or `PHOSPHATE_LOCATION_UNKNOWN` —
+`{ "error": { "message": "No sampling location matches the loc_id provided.", ... } }`
+if no `locations` row has that id. These previously surfaced as `500`s.
 
 ---
 
@@ -356,12 +395,15 @@ changed. To move the record to a different sampling site, include a flat
 
 **Auth:** admin only (`Authorization: Bearer <token>`).
 
-**Response `200`:** the updated record as `{ "data": { ... } }`.
+**Response `200`:** the updated record as `{ "data": { ... } }`,
+with `"message": "Phosphate record updated."` and `"meta": { "id": "<uuid>" }`.
 
-**Response `400`:** `{ "error": { "message": "Invalid id" } }` if `:id` is not a
+**Response `400`:** as for `POST`, when `loc_id` is present in the body.
+
+**Response `400`:** `INVALID_ID` — `{ "error": { "message": "Invalid id", ... } }` if `:id` is not a
 valid UUID.
 
-**Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
+**Response `404`:** `PHOSPHATE_RECORD_NOT_FOUND` — `{ "error": { "message": "Record not found", ... } }` if `id`
 does not match any row.
 
 ---
@@ -374,10 +416,10 @@ Deletes a phosphate record by UUID.
 
 **Response `204`:** no body.
 
-**Response `400`:** `{ "error": { "message": "Invalid id" } }` if `:id` is not a
+**Response `400`:** `INVALID_ID` — `{ "error": { "message": "Invalid id", ... } }` if `:id` is not a
 valid UUID.
 
-**Response `404`:** `{ "error": { "message": "Record not found" } }` if `id`
+**Response `404`:** `PHOSPHATE_RECORD_NOT_FOUND` — `{ "error": { "message": "Record not found", ... } }` if `id`
 does not match any row.
 
 ---
@@ -411,7 +453,12 @@ directly to S3 using the returned URL — the file never passes through this ser
   declared size — the server validates it, and the S3 PUT will fail for any file
   exceeding the limit enforced by the bucket policy.
 
-**Response `201`:**
+Each of the above produces a `400` with code `INVALID_FIELD` (or `INVALID_ID` for a
+malformed upload id), a message naming the offending file or field, and a
+`details` object carrying the allowed values.
+
+**Response `201`** also carries `"message": "Upload URLs issued."` and
+`"meta": { "count": <n>, "expiresInSeconds": 300 }`:
 ```json
 {
   "data": [
@@ -453,12 +500,18 @@ IDs has no effect.
 
 **Response `200`:**
 ```json
-{ "data": { "confirmed": 2 } }
+{
+  "data": { "confirmed": 1 },
+  "message": "Confirmed 1 of 2 uploads.",
+  "meta": { "requested": 2, "confirmed": 1, "skipped": 1 }
+}
 ```
 
 `confirmed` is the count of records actually updated (pending → confirmed). IDs
-that are already confirmed, don't exist, or belong to another user are silently
-skipped.
+that are already confirmed, don't exist, or belong to another user are skipped
+rather than rejected, so **a partial confirm is still a `200`**. Compare
+`meta.confirmed` against `meta.requested` — or read `meta.skipped` — to detect a
+shortfall; the message states both counts. `data` keeps its original shape.
 
 ---
 
@@ -481,10 +534,13 @@ to view photos attached to another volunteer's record).
 }
 ```
 
+The response also carries `"message": "Download URL issued."` and
+`"meta": { "expiresInSeconds": 900 }`.
+
 The URL expires in **15 minutes**. It carries an `inline` content-disposition
 header so browsers render the image directly rather than downloading it.
 
-**Response `404`:** upload not found.
+**Response `404`:** `UPLOAD_NOT_FOUND` — upload not found.
 
 ---
 
@@ -494,7 +550,8 @@ List the authenticated user's confirmed uploads, newest first.
 
 **Auth:** volunteer or admin.
 
-**Response `200`:**
+**Response `200`** also carries `"message": "Retrieved your uploads."` and
+`"meta": { "count": <n> }`:
 ```json
 {
   "data": [
@@ -524,6 +581,7 @@ All `/api/users` endpoints require an admin JWT.
 Returns all users. Password hashes are never included in any response.
 
 **Response `200`:** `{ "data": [ { "id", "email", "name", "is_active", "created_at", "updated_at" }, ... ] }`
+Also carries `"message": "Retrieved users."` and `"meta": { "count": <n> }`.
 
 #### `POST /api/users`
 
@@ -537,8 +595,9 @@ Creates a new user.
 `role` defaults to `"volunteer"` if omitted. Valid values: `"admin"`, `"volunteer"`.
 
 **Response `201`:** the created user (no password hash).
+Also carries `"message": "User created."` and `"meta": { "id": "<uuid>" }`.
 
-**Response `409`:** `{ "error": { "message": "Email already in use" } }`
+**Response `409`:** `USER_EMAIL_TAKEN` — `{ "error": { "message": "Email already in use", ... } }`
 
 #### `PATCH /api/users/:id`
 
@@ -548,8 +607,9 @@ are changed.
 **Body:** any of `{ email?, name?, password?, is_active? }`.
 
 **Response `200`:** the updated user.
+Also carries `"message": "User updated."` and `"meta": { "id": "<uuid>" }`.
 
-**Response `404`:** `{ "error": { "message": "User not found" } }`
+**Response `404`:** `USER_NOT_FOUND` — `{ "error": { "message": "User not found", ... } }`
 
 #### `DELETE /api/users/:id`
 
@@ -558,21 +618,82 @@ assignment automatically.
 
 **Response `204`:** no body.
 
-**Response `404`:** `{ "error": { "message": "User not found" } }`
+**Response `404`:** `USER_NOT_FOUND` — `{ "error": { "message": "User not found", ... } }`
 
 ---
 
 ### Common error responses
 
-| Status | When | Body |
+Every error body has the same shape:
+
+```json
+{
+  "error": {
+    "message": "scum_photos must be an array of upload UUIDs",
+    "code": "PMN_SCUM_RULE_VIOLATION",
+    "details": { "field": "scum_photos", "expected": "array of upload UUIDs" },
+    "requestId": "a3f9c1e2-5b7d-4e01-9f2a-1c8e44b6d0a7"
+  }
+}
+```
+
+`details` is present only on `4xx` responses and carries client-safe context
+(field names, allowed values, what was received) — never DB internals. On `5xx` it
+is always omitted and the message is deliberately generic; the full detail,
+including the underlying `cause` chain, goes to the server log under the same
+`requestId`.
+
+| Status | When | Codes |
 | --- | --- | --- |
-| `400` | Missing required fields, a malformed UUID in the path, an invalid query param (`hasScum`), or a PMN scum-rule violation | `{ "error": { "message": "Invalid id" } }` (or a field-specific message) |
-| `401` | No token, invalid/expired token, or wrong credentials | `{ "error": { "message": "Unauthorized" } }` |
-| `403` | Authenticated but insufficient role | `{ "error": { "message": "Forbidden" } }` |
-| `404` | Record or user not found | `{ "error": { "message": "..." } }` |
-| `409` | Duplicate email on create/update | `{ "error": { "message": "Email already in use" } }` |
-| `429` | Rate limit exceeded | `{ "error": { "message": "Too many requests" } }` |
-| `500` | DB/query failure | `{ "error": { "message": "Internal server error" } }` |
+| `400` | Missing/invalid field, malformed UUID, invalid query param, PMN scum-rule violation, unknown `loc_id`, malformed JSON body | `MISSING_FIELD`, `INVALID_FIELD`, `INVALID_ID`, `MALFORMED_JSON`, `PMN_SCUM_RULE_VIOLATION`, `PHOSPHATE_LOCATION_UNKNOWN`, `USER_ROLE_UNKNOWN` |
+| `401` | No token, invalid/expired token, or wrong credentials | `UNAUTHORIZED`, `TOKEN_INVALID`, `TOKEN_EXPIRED`, `INVALID_CREDENTIALS` |
+| `403` | Authenticated but insufficient role, or an inactive account | `FORBIDDEN`, `ACCOUNT_INACTIVE` |
+| `404` | Record/user/upload not found, or no such endpoint | `PMN_RECORD_NOT_FOUND`, `PMN_SCUM_PHOTO_NOT_FOUND`, `PHOSPHATE_RECORD_NOT_FOUND`, `USER_NOT_FOUND`, `UPLOAD_NOT_FOUND`, `ROUTE_NOT_FOUND` |
+| `409` | Duplicate email on create/update | `USER_EMAIL_TAKEN` |
+| `413` | Request body over the 1MB limit | `PAYLOAD_TOO_LARGE` |
+| `415` | Unsupported request body encoding | `UNSUPPORTED_MEDIA_TYPE` |
+| `429` | Rate limit exceeded | `RATE_LIMITED` |
+| `500` | DB/query/S3 failure | `*_READ_FAILED`, `*_CREATE_FAILED`, `*_UPDATE_FAILED`, `*_DELETE_FAILED`, `AUTH_LOGIN_FAILED`, `INTERNAL_ERROR` |
+
+The `4xx` message strings are unchanged from earlier versions, so a client that
+string-matches them keeps working. New clients should use `error.code`.
+
+### Error codes
+
+Codes are **append-only**: once published, a code is never renamed and never
+reused for a different condition. The full list lives in `src/http/error.codes.ts`.
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `ROUTE_NOT_FOUND` | 404 | No endpoint matches the method and path. |
+| `MALFORMED_JSON` | 400 | The request body is not valid JSON, or was truncated. |
+| `PAYLOAD_TOO_LARGE` | 413 | The request body exceeds the 1MB limit. |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | The request body encoding is not supported. |
+| `RATE_LIMITED` | 429 | Rate limit exceeded. |
+| `INTERNAL_ERROR` | 500 | Unclassified server failure. |
+| `INVALID_ID` | 400 | A path parameter or id field is not a UUID. |
+| `MISSING_FIELD` | 400 | A required body field is absent. |
+| `INVALID_FIELD` | 400 | A body or query field has a bad type or value. |
+| `UNAUTHORIZED` | 401 | No credentials supplied, or the auth header is malformed. |
+| `TOKEN_INVALID` | 401 | The JWT is malformed or its signature does not verify. |
+| `TOKEN_EXPIRED` | 401 | The JWT is well-formed but past its expiry — re-login. |
+| `FORBIDDEN` | 403 | Authenticated, but the role level is insufficient. |
+| `INVALID_CREDENTIALS` | 401 | Unknown email or wrong password (indistinguishable by design). |
+| `ACCOUNT_INACTIVE` | 403 | The account exists but `is_active` is false. |
+| `AUTH_LOGIN_FAILED` | 500 | Login failed for a server-side reason. |
+| `PMN_SCUM_RULE_VIOLATION` | 400 | A scum invariant was violated — see [Scum rules](#scum-rules). |
+| `PMN_RECORD_NOT_FOUND` | 404 | No PMN record with that id. |
+| `PMN_SCUM_PHOTO_NOT_FOUND` | 404 | The upload is not currently referenced as a scum photo (or does not exist). |
+| `PMN_*_FAILED` | 500 | PMN read/create/update/delete/scum-lookup failure. |
+| `PHOSPHATE_RECORD_NOT_FOUND` | 404 | No phosphate record with that id. |
+| `PHOSPHATE_LOCATION_UNKNOWN` | 400 | No sampling location matches the `loc_id` supplied. |
+| `PHOSPHATE_*_FAILED` | 500 | Phosphate read/create/update/delete failure. |
+| `USER_NOT_FOUND` | 404 | No user with that id. |
+| `USER_EMAIL_TAKEN` | 409 | That email is already registered. |
+| `USER_ROLE_UNKNOWN` | 400 | The requested role is not configured on this server. |
+| `USERS_*_FAILED` | 500 | User read/create/update/delete failure. |
+| `UPLOAD_NOT_FOUND` | 404 | No upload with that id. |
+| `UPLOADS_*_FAILED` | 500 | Presign/confirm/download-url/list failure. |
 
 > Note: `429` responses also carry standard `RateLimit-*` headers
 > (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`).
@@ -838,34 +959,63 @@ API features follow a layered pattern, one directory per feature under `src/`:
 ```
 *.queries.ts   Prisma data access
    → *.service.ts    business logic; wraps DB errors in a typed *ServiceError (original as `cause`)
-   → *.controller.ts Express handler; responds `{ data }`, forwards errors via next()
+   → *.controller.ts Express handler; responds via src/http/ helpers, forwards errors via next()
    → *.routes.ts     Express Router
 ```
 
 `src/index.ts` wires it together: it mounts each feature router and registers
-the central error middleware **last**. The error middleware logs the full error
-server-side but returns only a generic JSON body, so DB internals never reach
-clients. **PMN (`src/pmn/`) is the reference implementation** to copy when adding
-a new feature.
+the central error middleware **last**. Every error class extends `ApiError`
+(`src/http/api.error.ts`), which carries its own status, machine-readable `code`
+and client-safe `publicMessage` — so the error middleware maps any thrown value to
+a response without per-feature knowledge. It logs the full error, including a
+redacted summary of the `cause` chain, keyed by `requestId`; DB internals never
+reach clients. **PMN (`src/pmn/`) is the reference implementation** to copy when
+adding a new feature.
+
+#### The `src/http/` module
+
+One place for everything about the HTTP envelope:
+
+| File | Contents |
+| --- | --- |
+| `error.codes.ts` | The `ErrorCodes` const object and `ErrorCode` union. **Append-only.** |
+| `api.error.ts` | `ApiError` + `BadRequestError`, `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `TooManyRequestsError`, `InternalError`. |
+| `respond.ts` | `ok`, `created`, `noContent`, `list` (derives `meta.count`), and `fail`. |
+| `validate.ts` | `UUID_RE`/`isUuid` and the `require*` helpers, which throw `BadRequestError`. |
+| `log.ts` | `logError`, `summarizeCause` and `redact` — server-side log shaping only. |
+
+`ApiError` splits `message` (internal, logged, may name the failed operation) from
+`publicMessage` (what the client sees). For `4xx` these are usually the same; for
+`5xx` they must not be.
 
 ### Request lifecycle / middleware chain
 
 ```
-helmet              security headers, strips X-Powered-By
+requestId           first — assigns req.requestId, echoes X-Request-Id on every response
+ → helmet           security headers, strips X-Powered-By
  → cors             allowlist from CORS_ALLOWED_ORIGINS; allows Authorization header
- → /health          (public, no auth, no rate limit)
+ → /health          (public, no auth, no rate limit; the one un-enveloped response)
+ → express.json     1mb limit — over it yields 413 PAYLOAD_TOO_LARGE
  → rateLimiter      per-IP; applied to both /auth and /api before auth
  → /auth/login      public login endpoint (no JWT required)
  → jwtAuth          optional JWT extraction on /api — sets req.user if token valid;
                     passes through if no token (guest); 401 if token present but invalid
  → requireRole()    per-route guard — 401 unauthenticated, 403 insufficient role
  → feature routers  (/api/pmn, /api/phosphate-data, /api/users, /api/uploads)
- → errorHandler     (last) logs full error, returns generic body
+ → notFoundHandler  unmatched routes → 404 ROUTE_NOT_FOUND in the JSON envelope
+ → errorHandler     (last) maps ApiError → status/code/message; logs redacted cause
 ```
+
+- **`requestId`** (`src/middleware/request.id.ts`) runs first so that cors, the
+  rate limiter and the body parser all fail with a correlation id already
+  attached. A client-supplied `X-Request-Id` is honored only if it matches
+  `[A-Za-z0-9_-]{8,64}`, so it cannot be used to forge log entries.
 
 - **`jwtAuth`** (`src/middleware/jwt.auth.ts`) validates a `Bearer` token if
   present. No token = guest access (passes through). Invalid/expired token = 401
-  (never silently treated as guest). **Throws at startup if `JWT_SECRET` is
+  (never silently treated as guest). The body says only `"Unauthorized"` in every
+  failure case; `error.code` distinguishes `TOKEN_EXPIRED` from `TOKEN_INVALID`,
+  and the reason is logged. **Throws at startup if `JWT_SECRET` is
   unset** (fail-closed). Similarly, **`src/s3.ts` throws at startup if
   `AWS_REGION` or `S3_BUCKET_NAME` are unset** — same fail-closed pattern.
 - **`requireRole(role)`** (`src/middleware/require.role.ts`) is a middleware
@@ -885,12 +1035,21 @@ src/
   index.ts                  app bootstrap, middleware chain, route mounting
   db.ts                     shared Prisma client (pg adapter, RDS SSL)
   types/
-    express.d.ts            req.user type augmentation
+    express.d.ts            req.user + req.requestId type augmentation
+  http/                     HTTP envelope: codes, error classes, responders, validation
+    error.codes.ts          ErrorCodes const + ErrorCode union (append-only)
+    api.error.ts            ApiError base + BadRequest/Unauthorized/Forbidden/NotFound/Conflict/TooManyRequests/Internal
+    respond.ts              ok / created / noContent / list / fail — the only place a body is shaped
+    validate.ts             UUID_RE, isUuid, require* helpers (throw BadRequestError)
+    log.ts                  logError, summarizeCause, redact — server-side log shaping
+    index.ts                barrel re-export
   middleware/
+    request.id.ts           assigns req.requestId, sets X-Request-Id (mounted first)
     jwt.auth.ts             optional JWT extraction (fail-closed on missing JWT_SECRET)
     require.role.ts         requireRole() factory — enforces volunteer/admin levels
     rate.limit.ts           per-IP rate limiter
-    error.handler.ts        central error middleware (generic responses)
+    not.found.handler.ts    unmatched routes → 404 ROUTE_NOT_FOUND
+    error.handler.ts        central error middleware — ApiError → status/code/message
   auth/                     login feature
     auth.queries.ts         findUserByEmail (with roles join)
     auth.service.ts         loginUser — bcrypt verify, JWT sign, AuthServiceError
@@ -903,11 +1062,11 @@ src/
     users.routes.ts         usersRouter (all routes wrapped in requireRole("admin"))
   pmn/                      reference feature
     pmn.queries.ts          Prisma access — get (optional hasScum filter) / find by id / create / update / delete / scum-photo reference check
-    pmn.service.ts          service functions, scum validation, PmnServiceError + PmnValidationError (400)
+    pmn.service.ts          service functions, scum validation, PmnServiceError (500) + PmnValidationError (400)
     pmn.controller.ts       GET, POST, PATCH, DELETE handlers + public scum photo URL handler
     pmn.routes.ts           pmnRouter — GET public, POST volunteer+, PATCH/DELETE admin, GET /scum-photos/:uploadId/url public
   watershed/                phosphate-data feature (locations joined on GET)
-    watershed.queries.ts    Prisma access — get (include locations) / create / update / delete
+    watershed.queries.ts    Prisma access — findLocationById / get (include locations) / create / update / delete
     watershed.service.ts    service functions + WatershedServiceError
     watershed.controller.ts GET, POST, PATCH, DELETE handlers (maps flat loc_id → relation)
     watershed.routes.ts     watershedRouter — GET public, POST volunteer+, PATCH/DELETE admin
@@ -1046,6 +1205,23 @@ This prints the row count and rows from `pmn_combined_field_data`. Per project
 convention, prefer these standalone runner scripts over inline `console.log`s
 when testing query code.
 
+### Smoke-testing the response envelope
+
+Against a running dev server, with a seeded admin:
+
+```bash
+ADMIN_EMAIL=... ADMIN_PASSWORD=... ./scripts/test-envelope.sh
+npx ts-node scripts/test-redaction.ts   # log-redaction unit checks; no server needed
+```
+
+`test-envelope.sh` asserts the status and `error.code` of every documented failure,
+checks that `meta.count` matches the row count, that `error.requestId` matches the
+`X-Request-Id` header, and sweeps every error body for connection strings, SQL,
+`password_hash` and stack traces. `scripts/test-scum-photos.sh` doubles as a
+back-compat regression test: it reads `.data.token`, `.data[0].uploadId` and
+`.data.confirmed`, so it passing unchanged is the sharpest proof the envelope
+stayed additive.
+
 ---
 
 ## Adding a new endpoint (for maintainers)
@@ -1054,18 +1230,28 @@ Copy the `src/pmn/` feature as a template:
 
 1. `*.queries.ts` — Prisma calls only, return Prisma model types.
 2. `*.service.ts` — wrap queries; catch and re-throw as a typed `*ServiceError`
-   carrying the original as `cause`. (Note: `tsconfig` targets ES2020, which
-   predates the `Error` `{ cause }` constructor option, so assign `cause`
-   manually as a property — see `PmnServiceError`.)
-3. `*.controller.ts` — Express handler; respond `{ data }`, `next(err)` on
-   failure. Never touch Prisma here.
+   extending `InternalError` (from `src/http/api.error.ts`), passing the original
+   as `cause` plus a per-call-site `code` and a client-safe `publicMessage`.
+   Client-input problems get a class extending `BadRequestError` instead — see
+   `PmnValidationError`. Add any new codes to `src/http/error.codes.ts`; that list
+   is append-only. (Note: `tsconfig` targets ES2020, which predates the `Error`
+   `{ cause }` constructor option, so `ApiError` assigns `cause` manually as a
+   property.)
+3. `*.controller.ts` — Express handler; respond with `ok` / `created` /
+   `noContent` / `list` from `src/http/respond.ts`, giving each success a short
+   message and any useful `meta`. Validate input with the `require*` helpers from
+   `src/http/validate.ts` — they throw, so there is no `res.status(400)` in a
+   controller. `next(err)` on failure; never `instanceof`-check a service error to
+   pick a status, because the error already carries one. Never touch Prisma here.
 4. `*.routes.ts` — an Express `Router`. Apply `requireRole("volunteer")` or
    `requireRole("admin")` per-route as needed. `GET` routes are public by
    default (no `requireRole`).
 5. In `src/index.ts`, mount the router under `/api/<feature>` **before** the
-   `errorHandler`.
-6. In `src/middleware/error.handler.ts`, add the new `*ServiceError` to the
-   handler so unexpected DB errors return a feature-specific message.
+   `notFoundHandler` and `errorHandler`.
+6. Add the endpoint's cases to `scripts/test-envelope.sh`.
+
+`src/middleware/error.handler.ts` needs **no** per-feature edit — it maps any
+`ApiError` by its own status and code.
 
 ---
 
@@ -1102,6 +1288,15 @@ server cert. Read that note before touching DB SSL/connection config.
 - **No pagination or sorting, and little filtering.** `GET /api/pmn/combined-field-data`
   returns the whole table on every call. The only filter is `hasScum`. Front ends
   should fetch once and filter or sort in the browser for now.
+- **Partial upload confirms are still `200`.** `POST /api/uploads/confirm` reports
+  a shortfall through `message` and `meta` (`requested` / `confirmed` / `skipped`)
+  but does not fail the request when some ids are unknown or belong to another
+  user. Changing the status would break existing clients, so it is deferred to a
+  versioned change.
+- **No `meta.pagination`.** `meta` currently carries only `count`, `id`, `filters`
+  and expiry hints; pagination lands with the pagination work above.
+- **Logging is `console.error` + JSON**, not a logging library. Structured and
+  keyed by `requestId`, but there is no log level config or transport.
 - **Single-instance rate limiting** (in-memory store).
 - **RDS cert not verified** (see SSL note above).
 

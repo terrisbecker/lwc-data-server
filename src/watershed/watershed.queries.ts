@@ -7,6 +7,10 @@ export type PhosphateDataWithLocation = Prisma.phosphate_dataGetPayload<{
   include: { locations: true };
 }>;
 
+export async function findLocationById(loc_id: string): Promise<{ loc_id: string } | null> {
+  return prisma.locations.findUnique({ where: { loc_id }, select: { loc_id: true } });
+}
+
 export async function getAllPhosphateData(): Promise<PhosphateDataWithLocation[]> {
   return prisma.phosphate_data.findMany({ include: { locations: true } });
 }

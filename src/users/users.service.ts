@@ -9,27 +9,33 @@ import {
   findRoleByName,
   type SafeUser,
 } from "./users.queries";
+import { ApiError, InternalError, NotFoundError, ConflictError, BadRequestError } from "../http/api.error";
+import { ErrorCodes, type ErrorCode } from "../http/error.codes";
 
-export class UsersServiceError extends Error {
-  readonly cause?: unknown;
-
-  constructor(message: string, cause?: unknown) {
-    super(message);
+// `message` names the failed operation for the log; the client gets the
+// per-call-site publicMessage instead.
+export class UsersServiceError extends InternalError {
+  constructor(
+    message: string,
+    cause?: unknown,
+    code: ErrorCode = ErrorCodes.USERS_READ_FAILED,
+    publicMessage = "The request could not be completed.",
+  ) {
+    super(message, { code, publicMessage, cause });
     this.name = "UsersServiceError";
-    this.cause = cause;
   }
 }
 
-export class UserNotFoundError extends Error {
+export class UserNotFoundError extends NotFoundError {
   constructor() {
-    super("User not found");
+    super("User not found", { code: ErrorCodes.USER_NOT_FOUND });
     this.name = "UserNotFoundError";
   }
 }
 
-export class DuplicateEmailError extends Error {
+export class DuplicateEmailError extends ConflictError {
   constructor() {
-    super("Email already in use");
+    super("Email already in use", { code: ErrorCodes.USER_EMAIL_TAKEN });
     this.name = "DuplicateEmailError";
   }
 }
@@ -40,7 +46,12 @@ export async function listUsers(): Promise<SafeUser[]> {
   try {
     return await getAllUsers();
   } catch (cause) {
-    throw new UsersServiceError("Failed to fetch users", cause);
+    throw new UsersServiceError(
+      "Failed to fetch users",
+      cause,
+      ErrorCodes.USERS_READ_FAILED,
+      "Users could not be retrieved.",
+    );
   }
 }
 
@@ -50,8 +61,13 @@ export async function getUser(id: string): Promise<SafeUser> {
     if (!user) throw new UserNotFoundError();
     return user;
   } catch (err) {
-    if (err instanceof UserNotFoundError) throw err;
-    throw new UsersServiceError("Failed to fetch user", err);
+    if (err instanceof ApiError) throw err;
+    throw new UsersServiceError(
+      "Failed to fetch user",
+      err,
+      ErrorCodes.USERS_READ_FAILED,
+      "The user could not be retrieved.",
+    );
   }
 }
 
@@ -65,7 +81,12 @@ export async function createNewUser(body: {
     const roleName = body.role ?? "volunteer";
     const role = await findRoleByName(roleName);
     if (!role) {
-      throw new UsersServiceError(`Role '${roleName}' not found`);
+      // A client-supplied role that isn't configured on this server is a 400,
+      // not a 500. The role name is echoed from the request, so it leaks nothing.
+      throw new BadRequestError("The requested role is not configured on this server.", {
+        code: ErrorCodes.USER_ROLE_UNKNOWN,
+        details: { field: "role", received: roleName },
+      });
     }
 
     const password_hash = await bcrypt.hash(body.password, BCRYPT_ROUNDS);
@@ -74,8 +95,13 @@ export async function createNewUser(body: {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       throw new DuplicateEmailError();
     }
-    if (err instanceof UsersServiceError || err instanceof DuplicateEmailError) throw err;
-    throw new UsersServiceError("Failed to create user", err);
+    if (err instanceof ApiError) throw err;
+    throw new UsersServiceError(
+      "Failed to create user",
+      err,
+      ErrorCodes.USERS_CREATE_FAILED,
+      "The request could not be completed while creating the user.",
+    );
   }
 }
 
@@ -94,11 +120,16 @@ export async function patchUser(
     if (!user) throw new UserNotFoundError();
     return user;
   } catch (err) {
-    if (err instanceof UserNotFoundError) throw err;
+    if (err instanceof ApiError) throw err;
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       throw new DuplicateEmailError();
     }
-    throw new UsersServiceError("Failed to update user", err);
+    throw new UsersServiceError(
+      "Failed to update user",
+      err,
+      ErrorCodes.USERS_UPDATE_FAILED,
+      "The request could not be completed while updating the user.",
+    );
   }
 }
 
@@ -108,7 +139,12 @@ export async function removeUser(id: string): Promise<SafeUser> {
     if (!user) throw new UserNotFoundError();
     return user;
   } catch (err) {
-    if (err instanceof UserNotFoundError) throw err;
-    throw new UsersServiceError("Failed to delete user", err);
+    if (err instanceof ApiError) throw err;
+    throw new UsersServiceError(
+      "Failed to delete user",
+      err,
+      ErrorCodes.USERS_DELETE_FAILED,
+      "The request could not be completed while deleting the user.",
+    );
   }
 }

@@ -5,26 +5,31 @@ import {
   updateRecord,
   deleteRecord,
   getPublicScumPhotoUrl,
-  PmnValidationError,
 } from "./pmn.service";
 import { Prisma } from "../../generated/prisma/client";
+import { GET_EXPIRY_SECONDS } from "../uploads/uploads.service";
+import { ok, created, noContent, list } from "../http/respond";
+import { requireUuidParam, optionalBooleanQuery } from "../http/validate";
+import { NotFoundError } from "../http/api.error";
+import { ErrorCodes } from "../http/error.codes";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const recordNotFound = () =>
+  new NotFoundError("Record not found", { code: ErrorCodes.PMN_RECORD_NOT_FOUND });
 
 export async function handleGetCombinedFieldData(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const { hasScum } = req.query;
-  if (hasScum !== undefined && hasScum !== "true" && hasScum !== "false") {
-    res.status(400).json({ error: { message: "hasScum must be true or false" } });
-    return;
-  }
-
   try {
-    const data = await getCombinedFieldData(hasScum === undefined ? undefined : hasScum === "true");
-    res.json({ data });
+    const hasScum = optionalBooleanQuery(req.query.hasScum, "hasScum");
+    const data = await getCombinedFieldData(hasScum);
+    list(
+      res,
+      data,
+      "Retrieved PMN combined field data.",
+      hasScum === undefined ? undefined : { filters: { hasScum } },
+    );
   } catch (err) {
     next(err);
   }
@@ -40,12 +45,8 @@ export async function handleCreateCombinedFieldData(
     // client-supplied id would allow callers to force a specific primary key.
     const { id: _id, ...safeBody } = req.body as Record<string, unknown>;
     const data = await createRecord(safeBody as Prisma.pmn_combined_field_dataCreateInput);
-    res.status(201).json({ data });
+    created(res, data, "PMN record created.", { id: data.id });
   } catch (err) {
-    if (err instanceof PmnValidationError) {
-      res.status(400).json({ error: { message: err.message } });
-      return;
-    }
     next(err);
   }
 }
@@ -55,26 +56,12 @@ export async function handleUpdateCombinedFieldData(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  if (!UUID_RE.test(req.params.id as string)) {
-    res.status(400).json({ error: { message: "Invalid id" } });
-    return;
-  }
-
   try {
-    const record = await updateRecord(
-      req.params.id as string,
-      req.body as Prisma.pmn_combined_field_dataUpdateInput,
-    );
-    if (record === null) {
-      res.status(404).json({ error: { message: "Record not found" } });
-      return;
-    }
-    res.json({ data: record });
+    const id = requireUuidParam(req.params.id);
+    const record = await updateRecord(id, req.body as Prisma.pmn_combined_field_dataUpdateInput);
+    if (record === null) throw recordNotFound();
+    ok(res, record, "PMN record updated.", { id });
   } catch (err) {
-    if (err instanceof PmnValidationError) {
-      res.status(400).json({ error: { message: err.message } });
-      return;
-    }
     next(err);
   }
 }
@@ -84,18 +71,10 @@ export async function handleDeleteCombinedFieldData(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  if (!UUID_RE.test(req.params.id as string)) {
-    res.status(400).json({ error: { message: "Invalid id" } });
-    return;
-  }
-
   try {
-    const record = await deleteRecord(req.params.id as string);
-    if (record === null) {
-      res.status(404).json({ error: { message: "Record not found" } });
-      return;
-    }
-    res.status(204).send();
+    const record = await deleteRecord(requireUuidParam(req.params.id));
+    if (record === null) throw recordNotFound();
+    noContent(res);
   } catch (err) {
     next(err);
   }
@@ -106,18 +85,17 @@ export async function handleGetScumPhotoUrl(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  if (!UUID_RE.test(req.params.uploadId as string)) {
-    res.status(400).json({ error: { message: "Invalid id" } });
-    return;
-  }
-
   try {
-    const data = await getPublicScumPhotoUrl(req.params.uploadId as string);
+    const data = await getPublicScumPhotoUrl(requireUuidParam(req.params.uploadId, "uploadId"));
     if (!data) {
-      res.status(404).json({ error: { message: "Scum photo not found" } });
-      return;
+      // Deliberately indistinguishable from "no such upload": this endpoint is
+      // public, so it must not reveal which upload ids exist. No `details` here
+      // for the same reason — see getPublicScumPhotoUrl in pmn.service.ts.
+      throw new NotFoundError("Scum photo not found", {
+        code: ErrorCodes.PMN_SCUM_PHOTO_NOT_FOUND,
+      });
     }
-    res.json({ data });
+    ok(res, data, "Scum photo URL issued.", { expiresInSeconds: GET_EXPIRY_SECONDS });
   } catch (err) {
     next(err);
   }

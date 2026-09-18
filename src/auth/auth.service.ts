@@ -1,27 +1,35 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { findUserByEmail } from "./auth.queries";
+import { ApiError, InternalError, UnauthorizedError, ForbiddenError } from "../http/api.error";
+import { ErrorCodes } from "../http/error.codes";
 
-export class AuthServiceError extends Error {
-  readonly cause?: unknown;
-
+// `message` stays the internal description for the log; the client sees the
+// deliberately non-specific publicMessage instead.
+export class AuthServiceError extends InternalError {
   constructor(message: string, cause?: unknown) {
-    super(message);
+    super(message, {
+      code: ErrorCodes.AUTH_LOGIN_FAILED,
+      publicMessage: "Sign-in could not be completed. Please try again.",
+      cause,
+    });
     this.name = "AuthServiceError";
-    this.cause = cause;
   }
 }
 
-export class InvalidCredentialsError extends Error {
+// Fired for both an unknown email and a bad password. The wording must stay
+// identical in the two cases — together with the constant-time bcrypt compare in
+// loginUser, that is what prevents user enumeration.
+export class InvalidCredentialsError extends UnauthorizedError {
   constructor() {
-    super("Invalid email or password");
+    super("Invalid email or password", { code: ErrorCodes.INVALID_CREDENTIALS });
     this.name = "InvalidCredentialsError";
   }
 }
 
-export class InactiveUserError extends Error {
+export class InactiveUserError extends ForbiddenError {
   constructor() {
-    super("Account is inactive");
+    super("Account is inactive", { code: ErrorCodes.ACCOUNT_INACTIVE });
     this.name = "InactiveUserError";
   }
 }
@@ -60,9 +68,7 @@ export async function loginUser(
 
     return { token, user: { id: user.id, email: user.email, roles } };
   } catch (err) {
-    if (err instanceof InvalidCredentialsError || err instanceof InactiveUserError) {
-      throw err;
-    }
+    if (err instanceof ApiError) throw err;
     throw new AuthServiceError("Login failed", err);
   }
 }
