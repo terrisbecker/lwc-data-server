@@ -67,7 +67,7 @@ export function jwtAuth(req: Request, res: Response, next: NextFunction): void {
         level: "warn",
         requestId: req.requestId,
         method: req.method,
-        path: req.path,
+        path: req.originalUrl,
         status: 401,
         code: expired ? ErrorCodes.TOKEN_EXPIRED : ErrorCodes.TOKEN_INVALID,
         name,

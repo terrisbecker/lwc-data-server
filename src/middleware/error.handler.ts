@@ -94,7 +94,7 @@ export function errorHandler(
     {
       requestId,
       method: req.method,
-      path: req.path,
+      path: req.originalUrl,
       userId: req.user?.id,
       status: apiError.status,
       code: apiError.code,

@@ -75,7 +75,10 @@ export async function generatePresignedPutUrls(
 
     await createUploadRecords(records.map(({ record }) => record));
 
-    return Promise.all(
+    // Awaited inside the try for the same reason as confirmUploads below — a bare
+    // `return` of the promise escapes this catch, so an S3 credential or signing
+    // failure reached the error handler unwrapped and unclassified.
+    return await Promise.all(
       records.map(async ({ record }) => {
         const command = new PutObjectCommand({
           Bucket: S3_BUCKET,

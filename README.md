@@ -1214,6 +1214,11 @@ ADMIN_EMAIL=... ADMIN_PASSWORD=... ./scripts/test-envelope.sh
 npx ts-node scripts/test-redaction.ts   # log-redaction unit checks; no server needed
 ```
 
+The rate-limit checks run last and exhaust the login bucket; since the limiter is
+in-memory, restart the dev server between runs or pass `SKIP_RATE_LIMIT=1`. The
+write round-trips create and delete their own rows, so the script leaves nothing
+behind. Nothing in it touches S3.
+
 `test-envelope.sh` asserts the status and `error.code` of every documented failure,
 checks that `meta.count` matches the row count, that `error.requestId` matches the
 `X-Request-Id` header, and sweeps every error body for connection strings, SQL,
