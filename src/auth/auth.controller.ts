@@ -1,5 +1,9 @@
 import type { Request, Response, NextFunction } from "express";
-import { loginUser, InvalidCredentialsError, InactiveUserError } from "./auth.service";
+import { loginUser } from "./auth.service";
+import { ok } from "../http/respond";
+import { requireString } from "../http/validate";
+import { BadRequestError } from "../http/api.error";
+import { ErrorCodes } from "../http/error.codes";
 
 export async function handleLogin(
   req: Request,
@@ -10,21 +14,17 @@ export async function handleLogin(
     const { email, password } = req.body as { email: string; password: string };
 
     if (!email || !password) {
-      res.status(400).json({ error: { message: "email and password are required" } });
-      return;
+      throw new BadRequestError("email and password are required", {
+        code: ErrorCodes.MISSING_FIELD,
+        details: { required: ["email", "password"] },
+      });
     }
 
-    const result = await loginUser(email, password);
-    res.json({ data: result });
+    const result = await loginUser(requireString(email, "email"), password);
+    ok(res, result, "Signed in.");
   } catch (err) {
-    if (err instanceof InvalidCredentialsError) {
-      res.status(401).json({ error: { message: "Invalid email or password" } });
-      return;
-    }
-    if (err instanceof InactiveUserError) {
-      res.status(403).json({ error: { message: "Account is inactive" } });
-      return;
-    }
+    // Every error this path can raise now carries its own status and code, so the
+    // central handler maps it — no instanceof ladder needed here.
     next(err);
   }
 }

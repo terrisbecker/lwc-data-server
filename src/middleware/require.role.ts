@@ -1,4 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
+import { UnauthorizedError, ForbiddenError } from "../http/api.error";
+import { fail } from "../http/respond";
 
 type Role = "admin" | "volunteer";
 
@@ -19,7 +21,7 @@ const ROLE_HIERARCHY: Record<Role, number> = {
 export function requireRole(minimumRole: Role) {
   return function (req: Request, res: Response, next: NextFunction): void {
     if (!req.user) {
-      res.status(401).json({ error: { message: "Unauthorized" } });
+      fail(res, new UnauthorizedError("Unauthorized"), req.requestId);
       return;
     }
 
@@ -29,7 +31,7 @@ export function requireRole(minimumRole: Role) {
     }, 0);
 
     if (userMaxLevel < ROLE_HIERARCHY[minimumRole]) {
-      res.status(403).json({ error: { message: "Forbidden" } });
+      fail(res, new ForbiddenError("Forbidden"), req.requestId);
       return;
     }
 

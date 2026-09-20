@@ -9,6 +9,8 @@ import { usersRouter } from "./users/users.routes";
 import { uploadsRouter } from "./uploads/uploads.routes";
 import { rateLimiter, loginRateLimiter } from "./middleware/rate.limit";
 import { jwtAuth } from "./middleware/jwt.auth";
+import { requestId } from "./middleware/request.id";
+import { notFoundHandler } from "./middleware/not.found.handler";
 import { errorHandler } from "./middleware/error.handler";
 
 const app = express();
@@ -19,6 +21,10 @@ const port = Number(process.env.PORT) || 3000;
 // spoofing X-Forwarded-For to bypass the rate limiter; set to the hop count in
 // the deploy environment (e.g. 1 behind a single ALB).
 app.set("trust proxy", Number(process.env.TRUST_PROXY) || 0);
+
+// Correlation id — first in the chain so helmet, cors, the rate limiter and the
+// body parser all fail with an id already attached and echoed as X-Request-Id.
+app.use(requestId);
 
 // Security headers (X-Content-Type-Options, HSTS, etc.) and X-Powered-By removal.
 app.use(helmet());
@@ -43,8 +49,9 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
-// Parse JSON request bodies for POST/PATCH endpoints.
-app.use(express.json());
+// Parse JSON request bodies for POST/PATCH endpoints. The limit is pinned so the
+// 413 is a deliberate part of the contract rather than an accident of the default.
+app.use(express.json({ limit: "1mb" }));
 
 // Auth routes — public, stricter rate limit to cap brute-force attempts.
 app.use("/auth", loginRateLimiter, authRouter);
@@ -56,6 +63,9 @@ app.use("/api/pmn", pmnRouter);
 app.use("/api/phosphate-data", watershedRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/uploads", uploadsRouter);
+
+// Unmatched routes — converts Express's default HTML 404 into the JSON envelope.
+app.use(notFoundHandler);
 
 // Central error handler — must be registered after all routes.
 app.use(errorHandler);

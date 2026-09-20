@@ -7,5 +7,7 @@ declare module "express-serve-static-core" {
       email: string;
       roles: string[];
     };
+    /** Correlation id assigned by the requestId middleware; present on every request. */
+    requestId: string;
   }
 }

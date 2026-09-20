@@ -1,15 +1,11 @@
 import type { Request, Response, NextFunction } from "express";
-import {
-  listUsers,
-  createNewUser,
-  patchUser,
-  removeUser,
-  UserNotFoundError,
-  DuplicateEmailError,
-} from "./users.service";
+import { listUsers, createNewUser, patchUser, removeUser } from "./users.service";
+import { ok, created, noContent, list } from "../http/respond";
+import { requireUuidParam, requireOneOf } from "../http/validate";
+import { BadRequestError } from "../http/api.error";
+import { ErrorCodes } from "../http/error.codes";
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const VALID_ROLES = new Set(["admin", "volunteer"]);
+const VALID_ROLES = ["admin", "volunteer"] as const;
 
 export async function handleGetUsers(
   _req: Request,
@@ -18,7 +14,7 @@ export async function handleGetUsers(
 ): Promise<void> {
   try {
     const data = await listUsers();
-    res.json({ data });
+    list(res, data, "Retrieved users.");
   } catch (err) {
     next(err);
   }
@@ -38,22 +34,17 @@ export async function handleCreateUser(
     };
 
     if (!email || !password) {
-      res.status(400).json({ error: { message: "email and password are required" } });
-      return;
+      throw new BadRequestError("email and password are required", {
+        code: ErrorCodes.MISSING_FIELD,
+        details: { required: ["email", "password"] },
+      });
     }
 
-    if (role !== undefined && !VALID_ROLES.has(role)) {
-      res.status(400).json({ error: { message: `role must be one of: ${[...VALID_ROLES].join(", ")}` } });
-      return;
-    }
+    if (role !== undefined) requireOneOf(role, VALID_ROLES, "role");
 
     const data = await createNewUser({ email, password, name, role });
-    res.status(201).json({ data });
+    created(res, data, "User created.", { id: data.id });
   } catch (err) {
-    if (err instanceof DuplicateEmailError) {
-      res.status(409).json({ error: { message: "Email already in use" } });
-      return;
-    }
     next(err);
   }
 }
@@ -63,26 +54,14 @@ export async function handleUpdateUser(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  if (!UUID_RE.test(req.params.id as string)) {
-    res.status(400).json({ error: { message: "Invalid id" } });
-    return;
-  }
-
   try {
+    const id = requireUuidParam(req.params.id);
     const data = await patchUser(
-      req.params.id as string,
+      id,
       req.body as { email?: string; password?: string; name?: string; is_active?: boolean },
     );
-    res.json({ data });
+    ok(res, data, "User updated.", { id });
   } catch (err) {
-    if (err instanceof UserNotFoundError) {
-      res.status(404).json({ error: { message: "User not found" } });
-      return;
-    }
-    if (err instanceof DuplicateEmailError) {
-      res.status(409).json({ error: { message: "Email already in use" } });
-      return;
-    }
     next(err);
   }
 }
@@ -92,19 +71,10 @@ export async function handleDeleteUser(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  if (!UUID_RE.test(req.params.id as string)) {
-    res.status(400).json({ error: { message: "Invalid id" } });
-    return;
-  }
-
   try {
-    await removeUser(req.params.id as string);
-    res.status(204).send();
+    await removeUser(requireUuidParam(req.params.id));
+    noContent(res);
   } catch (err) {
-    if (err instanceof UserNotFoundError) {
-      res.status(404).json({ error: { message: "User not found" } });
-      return;
-    }
     next(err);
   }
 }
