@@ -86,15 +86,33 @@ function nullDecimal(val: string): string | null {
 function nullDate(val: string): Date | null {
   const s = val.trim();
   if (s === "") return null;
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
+
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  if (!m) return null;
+
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const date = new Date(Date.UTC(y, mo - 1, d));
+  // Rejects overflow like 2026-02-30, which Date.UTC would roll into March.
+  if (date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return null;
+  return date;
 }
 
+// The CSV is not zero-padded, and ISO 8601 requires a two-digit hour, so
+// `new Date("1970-01-01T8:30:00Z")` is an Invalid Date — which silently nulled
+// 58 sample_time values, 33 of them Site #1 - East Boat Launch. Parse the parts
+// instead of handing the string to the Date constructor.
 function nullTime(val: string): Date | null {
   const s = val.trim();
   if (s === "") return null;
-  const d = new Date(`1970-01-01T${s}Z`);
-  return isNaN(d.getTime()) ? null : d;
+
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+  if (!m) return null;
+
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  const sec = m[3] === undefined ? 0 : Number(m[3]);
+  if (h > 23 || min > 59 || sec > 59) return null;
+  return new Date(Date.UTC(1970, 0, 1, h, min, sec));
 }
 
 async function main() {
