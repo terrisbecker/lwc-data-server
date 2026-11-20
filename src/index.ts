@@ -12,6 +12,7 @@ import { jwtAuth } from "./middleware/jwt.auth";
 import { requestId } from "./middleware/request.id";
 import { notFoundHandler } from "./middleware/not.found.handler";
 import { errorHandler } from "./middleware/error.handler";
+import { home } from "./home/home";
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
@@ -42,6 +43,10 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
+
+// Public front page — ASCII banner, example requests and repo links. Plain text
+// for terminals (curl sends Accept: */*), HTML with clickable links for browsers.
+app.get("/", home);
 
 // Public health endpoint — intentionally exempt from auth and rate limiting so
 // load-balancer probes are never throttled or blocked. Registered before /api.
