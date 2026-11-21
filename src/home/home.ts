@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { LOGO_ASCII, LOGO_SVG } from "./logo";
+import { version } from "../../package.json";
 
 /**
  * GET / — a plain front page for people who open the API root in a browser or
@@ -18,6 +19,9 @@ const TITLE = [
   "L A C A M A S   W A T E R S H E D   C O U N C I L",
   "~~~~~~~~~~~~~~~~~~ Data API ~~~~~~~~~~~~~~~~~~~~~",
 ];
+
+/** Shown under the title; read from package.json so it can't drift. */
+const VERSION = `v${version}`;
 
 const EXAMPLES = [
   `curl ${BASE}/api/pmn/combined-field-data`,
@@ -51,7 +55,7 @@ function body(withLinks: boolean): string {
   ].join("\n");
 }
 
-const TEXT = `\n${LOGO_ASCII}\n\n${TITLE.map((l) => `   ${l}`).join("\n")}\n\n${body(false)}`;
+const TEXT = `\n${LOGO_ASCII}\n\n${TITLE.map((l) => `   ${l}`).join("\n")}\n${VERSION.padStart(3 + Math.ceil((TITLE[0].length + VERSION.length) / 2))}\n\n${body(false)}`;
 
 const HTML = `<!doctype html>
 <html lang="en">
@@ -70,7 +74,7 @@ const HTML = `<!doctype html>
 </head>
 <body><main>
 ${LOGO_SVG}
-<pre class="title">${TITLE.join("\n")}</pre>
+<pre class="title">${[...TITLE, VERSION].join("\n")}</pre>
 <pre>${body(true)}</pre>
 </main></body>
 </html>

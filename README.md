@@ -1,5 +1,7 @@
 # LWC Data Server
 
+**Version:** 1.1.0
+
 The HTTP/JSON API behind the Lacamas Watershed Council's (LWC) field-monitoring
 data. It publishes the observations LWC volunteers and staff collect on Lacamas
 Lake and its tributaries, and accepts new records from authorized contributors.
