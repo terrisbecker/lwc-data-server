@@ -41,7 +41,7 @@ const link = (url: string) => `<a href="${url}">${url}</a>`;
 function body(withLinks: boolean): string {
   const wrap = withLinks ? link : (url: string) => url;
   return [
-    " Reading data is free and open - no account or key needed.",
+    "Reading data is free. No account or API key is required. Request rates are limited to 100 per 15 minutes per IP address.",
     "",
     " Examples:",
     ...EXAMPLES.map((cmd) => {
