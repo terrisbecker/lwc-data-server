@@ -25,9 +25,8 @@ export class WatershedServiceError extends InternalError {
 }
 
 /**
- * Client input problems — the message is safe to return in a 400 response.
- * Watershed previously had no client-error class, so a bad `loc_id` surfaced as a
- * 500 (the Prisma `connect` blew up inside the service wrapper).
+ * Client input problems — the message is safe to return in a 400 response. An
+ * unknown `loc_id` lands here rather than as a 500 from the Prisma `connect`.
  */
 export class WatershedValidationError extends BadRequestError {
   constructor(message: string, code: ErrorCode = ErrorCodes.INVALID_FIELD, details?: unknown) {

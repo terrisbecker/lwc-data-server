@@ -9,9 +9,10 @@ import {
 import { Prisma } from "../../generated/prisma/client";
 import { GET_EXPIRY_SECONDS } from "../uploads/uploads.service";
 import { ok, created, noContent, list } from "../http/respond";
-import { requireUuidParam, optionalBooleanQuery } from "../http/validate";
+import { optionalBooleanQuery } from "../http/validate";
 import { NotFoundError } from "../http/api.error";
 import { ErrorCodes } from "../http/error.codes";
+import type { PathParams, RequestBody } from "../http/contract";
 
 const recordNotFound = () =>
   new NotFoundError("Record not found", { code: ErrorCodes.PMN_RECORD_NOT_FOUND });
@@ -41,10 +42,9 @@ export async function handleCreateCombinedFieldData(
   next: NextFunction,
 ): Promise<void> {
   try {
-    // Strip `id` — the DB assigns the UUID via gen_random_uuid(); accepting a
-    // client-supplied id would allow callers to force a specific primary key.
-    const { id: _id, ...safeBody } = req.body as Record<string, unknown>;
-    const data = await createRecord(safeBody as Prisma.pmn_combined_field_dataCreateInput);
+    // The contract rejects unknown fields, including `id` (the DB assigns it).
+    const body = req.body as RequestBody<"/api/pmn/combined-field-data", "post">;
+    const data = await createRecord(body as Prisma.pmn_combined_field_dataCreateInput);
     created(res, data, "PMN record created.", { id: data.id });
   } catch (err) {
     next(err);
@@ -57,8 +57,9 @@ export async function handleUpdateCombinedFieldData(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const id = requireUuidParam(req.params.id);
-    const record = await updateRecord(id, req.body as Prisma.pmn_combined_field_dataUpdateInput);
+    const { id } = req.params as PathParams<"/api/pmn/combined-field-data/{id}">;
+    const body = req.body as RequestBody<"/api/pmn/combined-field-data/{id}", "patch">;
+    const record = await updateRecord(id, body as Prisma.pmn_combined_field_dataUpdateInput);
     if (record === null) throw recordNotFound();
     ok(res, record, "PMN record updated.", { id });
   } catch (err) {
@@ -72,7 +73,8 @@ export async function handleDeleteCombinedFieldData(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const record = await deleteRecord(requireUuidParam(req.params.id));
+    const { id } = req.params as PathParams<"/api/pmn/combined-field-data/{id}">;
+    const record = await deleteRecord(id);
     if (record === null) throw recordNotFound();
     noContent(res);
   } catch (err) {
@@ -86,7 +88,8 @@ export async function handleGetScumPhotoUrl(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const data = await getPublicScumPhotoUrl(requireUuidParam(req.params.uploadId, "uploadId"));
+    const { uploadId } = req.params as PathParams<"/api/pmn/scum-photos/{uploadId}/url">;
+    const data = await getPublicScumPhotoUrl(uploadId);
     if (!data) {
       // Deliberately indistinguishable from "no such upload": this endpoint is
       // public, so it must not reveal which upload ids exist. No `details` here

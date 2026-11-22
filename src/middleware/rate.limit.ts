@@ -11,6 +11,9 @@ const tooManyRequests = (req: Request, res: Response) =>
 const windowMs = Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000;
 const max = Number(process.env.RATE_LIMIT_MAX) || 100;
 
+/** The resolved /api limit, so the front page quotes what is actually enforced. */
+export const API_RATE_LIMIT = { windowMs, max } as const;
+
 export const rateLimiter = rateLimit({
   windowMs,
   max,

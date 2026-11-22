@@ -4,11 +4,13 @@ import { ApiError, BadRequestError, ApiErrorOptions } from "../http/api.error";
 import { ErrorCodes, type ErrorCode } from "../http/error.codes";
 import { fail } from "../http/respond";
 import { logError } from "../http/log";
+import { JSON_BODY_LIMIT_LABEL } from "../http/limits";
+import { fromValidatorError } from "../openapi/validator";
 
 /**
  * Body-parser failures. `express.json()` throws http-errors objects carrying a
- * `type` discriminator; these are client mistakes, not server faults, and used to
- * surface as 500s.
+ * `type` discriminator; these are client mistakes, not server faults, so they map
+ * to 4xx rather than 500.
  *
  * `err.message` is never echoed here — it can quote a fragment of the raw body.
  */
@@ -21,7 +23,7 @@ const BODY_PARSER_ERRORS: Record<string, { status: number; code: ErrorCode; mess
   "entity.too.large": {
     status: 413,
     code: ErrorCodes.PAYLOAD_TOO_LARGE,
-    message: "The request body is larger than the 1MB limit.",
+    message: `The request body is larger than the ${JSON_BODY_LIMIT_LABEL} limit.`,
   },
   "encoding.unsupported": {
     status: 415,
@@ -37,6 +39,11 @@ const BODY_PARSER_ERRORS: Record<string, { status: number; code: ErrorCode; mess
 
 function toApiError(err: unknown): ApiError {
   if (err instanceof ApiError) return err;
+
+  // Contract (OpenAPI request validation) failures. Mapped before the generic 4xx
+  // branch below, which would otherwise flatten them into a detail-less 400.
+  const contractError = fromValidatorError(err);
+  if (contractError) return contractError;
 
   const type = (err as { type?: unknown } | null)?.type;
   if (typeof type === "string" && BODY_PARSER_ERRORS[type]) {

@@ -24,7 +24,6 @@ export function requestId(req: Request, res: Response, next: NextFunction): void
     typeof candidate === "string" && SAFE_REQUEST_ID.test(candidate) ? candidate : randomUUID();
 
   req.requestId = id;
-  res.locals.requestId = id;
   res.setHeader("X-Request-Id", id);
   next();
 }

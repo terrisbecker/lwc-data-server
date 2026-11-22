@@ -13,6 +13,8 @@ import { requestId } from "./middleware/request.id";
 import { notFoundHandler } from "./middleware/not.found.handler";
 import { errorHandler } from "./middleware/error.handler";
 import { home } from "./home/home";
+import { openapiRouter } from "./openapi/openapi.routes";
+import { JSON_BODY_LIMIT_BYTES } from "./http/limits";
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
@@ -54,9 +56,13 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
+// The OpenAPI contract (GET /openapi.yaml) and its Redoc page (GET /docs). Public,
+// static and not rate limited, like the front page.
+app.use(openapiRouter);
+
 // Parse JSON request bodies for POST/PATCH endpoints. The limit is pinned so the
 // 413 is a deliberate part of the contract rather than an accident of the default.
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
 
 // Auth routes — public, stricter rate limit to cap brute-force attempts.
 app.use("/auth", loginRateLimiter, authRouter);

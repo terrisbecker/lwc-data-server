@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # matches production (README: Node.js 22 LTS)
+          cache: npm
+      - run: npm ci
+      # The generated client is gitignored and `tsc` needs it. No database is
+      # contacted; prisma.config.ts only reads DATABASE_URL, which may be unset.
+      - run: npx prisma generate
+      - run: npm run build
+      # openapi:lint + static drift check (routes, roles, validate, error codes,
+      # version, generated types). No BASE_URL, so no live probes.
+      - run: npm run contract

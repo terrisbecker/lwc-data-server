@@ -1,6 +1,8 @@
 import type { Request, Response } from "express";
 import { LOGO_ASCII, LOGO_SVG } from "./logo";
 import { version } from "../../package.json";
+import { SPEC_SERVER_URL } from "../openapi/spec";
+import { API_RATE_LIMIT } from "../middleware/rate.limit";
 
 /**
  * GET / — a plain front page for people who open the API root in a browser or
@@ -12,16 +14,29 @@ import { version } from "../../package.json";
  * variant needs no escaping beyond the hand-written markup below.
  */
 
-const BASE = "https://api.lacamaswatershed.org";
+const BASE = SPEC_SERVER_URL;
 const REPO = "https://github.com/terrisbecker/lwc-data-server";
 
-const TITLE = [
-  "L A C A M A S   W A T E R S H E D   C O U N C I L",
-  "~~~~~~~~~~~~~~~~~~ Data API ~~~~~~~~~~~~~~~~~~~~~",
-];
+const HEADING = "L A C A M A S   W A T E R S H E D   C O U N C I L";
 
-/** Shown under the title; read from package.json so it can't drift. */
-const VERSION = `v${version}`;
+/**
+ * "~~~ Data API v1.1.0 ~~~", tilde-padded to the heading's width so the two lines
+ * stay aligned whatever the version string's length. The version is read from
+ * package.json so it can't drift.
+ */
+function rule(label: string, width: number): string {
+  const text = ` ${label} `;
+  const left = Math.floor((width - text.length) / 2);
+  return `${"~".repeat(left)}${text}${"~".repeat(width - text.length - left)}`;
+}
+
+const TITLE = [HEADING, rule(`Data API v${version}`, HEADING.length)];
+
+/** "15 minutes", or seconds when the window isn't a whole number of minutes. */
+function windowLabel(ms: number): string {
+  const unit = ms % 60_000 === 0 ? { n: ms / 60_000, word: "minute" } : { n: ms / 1000, word: "second" };
+  return `${unit.n} ${unit.word}${unit.n === 1 ? "" : "s"}`;
+}
 
 const EXAMPLES = [
   `curl ${BASE}/api/pmn/combined-field-data`,
@@ -30,8 +45,8 @@ const EXAMPLES = [
 ];
 
 const LINKS: Array<[label: string, url: string]> = [
+  ["Docs", `${BASE}/docs`],
   ["Source", REPO],
-  ["Docs", `${REPO}#readme`],
   ["Issues", `${REPO}/issues`],
 ];
 
@@ -42,7 +57,7 @@ function body(withLinks: boolean): string {
   const wrap = withLinks ? link : (url: string) => url;
   return [
     "Reading data is free. No account or API key is required.",
-    "Request rates are limited to 100 per 15 minutes per IP address.",
+    `Request rates are limited to ${API_RATE_LIMIT.max} per ${windowLabel(API_RATE_LIMIT.windowMs)} per IP address.`,
     "",
     " Examples:",
     ...EXAMPLES.map((cmd) => {
@@ -56,7 +71,7 @@ function body(withLinks: boolean): string {
   ].join("\n");
 }
 
-const TEXT = `\n${LOGO_ASCII}\n\n${TITLE.map((l) => `   ${l}`).join("\n")}\n${VERSION.padStart(3 + Math.ceil((TITLE[0].length + VERSION.length) / 2))}\n\n${body(false)}`;
+const TEXT = `\n${LOGO_ASCII}\n\n${TITLE.map((l) => `   ${l}`).join("\n")}\n\n${body(false)}`;
 
 const HTML = `<!doctype html>
 <html lang="en">
@@ -75,7 +90,7 @@ const HTML = `<!doctype html>
 </head>
 <body><main>
 ${LOGO_SVG}
-<pre class="title">${[...TITLE, VERSION].join("\n")}</pre>
+<pre class="title">${TITLE.join("\n")}</pre>
 <pre>${body(true)}</pre>
 </main></body>
 </html>

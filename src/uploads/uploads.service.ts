@@ -12,6 +12,8 @@ import {
 import { InternalError } from "../http/api.error";
 import { ErrorCodes, type ErrorCode } from "../http/error.codes";
 
+// Content type → object-key extension. The allowlist itself is the spec's
+// `UploadContentType` enum; keep the two in step.
 export const ALLOWED_CONTENT_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -19,9 +21,6 @@ export const ALLOWED_CONTENT_TYPES: Record<string, string> = {
   "image/gif": "gif",
   "application/pdf": "pdf",
 };
-
-export const MAX_FILES = 10;
-export const MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 
 export const PUT_EXPIRY_SECONDS = 300; // 5 min
 export const GET_EXPIRY_SECONDS = 900; // 15 min

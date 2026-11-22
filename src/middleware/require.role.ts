@@ -1,8 +1,11 @@
 import type { Request, Response, NextFunction } from "express";
 import { UnauthorizedError, ForbiddenError } from "../http/api.error";
 import { fail } from "../http/respond";
+import type { Schema } from "../http/contract";
 
-type Role = "admin" | "volunteer";
+// From the spec's `Role` enum, so adding a role there is a compile error here
+// until it gets a level.
+type Role = Schema<"Role">;
 
 const ROLE_HIERARCHY: Record<Role, number> = {
   volunteer: 1,
