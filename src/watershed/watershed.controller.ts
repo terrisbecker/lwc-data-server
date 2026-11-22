@@ -2,10 +2,9 @@ import type { Request, Response, NextFunction } from "express";
 import { getPhosphateData, createRecord, updateRecord, deleteRecord } from "./watershed.service";
 import { Prisma } from "../../generated/prisma/client";
 import { ok, created, noContent, list } from "../http/respond";
-import { requireUuidParam, requireUuidField } from "../http/validate";
-import { NotFoundError, BadRequestError } from "../http/api.error";
+import { NotFoundError } from "../http/api.error";
 import { ErrorCodes } from "../http/error.codes";
-import type { RequestBody } from "../http/contract";
+import type { PathParams, RequestBody } from "../http/contract";
 
 const recordNotFound = () =>
   new NotFoundError("Record not found", { code: ErrorCodes.PHOSPHATE_RECORD_NOT_FOUND });
@@ -29,28 +28,14 @@ export async function handleCreatePhosphateData(
   next: NextFunction,
 ): Promise<void> {
   try {
-    // Strip `id` — the DB assigns the UUID; accepting a client-supplied id would
-    // allow callers to force a specific primary key. Clients send a flat `loc_id`,
-    // which we map to the nested relation Prisma expects.
-    // The contract already rejects `id` and requires `loc_id`; both checks below
-    // stay as defense in depth.
-    const { id: _id, loc_id, ...rest } = req.body as RequestBody<"/api/phosphate-data", "post"> & {
-      id?: unknown;
-    };
-
-    if (loc_id === undefined) {
-      throw new BadRequestError("loc_id is required", {
-        code: ErrorCodes.MISSING_FIELD,
-        details: { field: "loc_id" },
-      });
-    }
-    const locationId = requireUuidField(loc_id, "loc_id");
-
+    // The contract requires a UUID `loc_id` and rejects `id` (the DB assigns it).
+    // Clients send `loc_id` flat; map it to the nested relation Prisma expects.
+    const { loc_id, ...rest } = req.body as RequestBody<"/api/phosphate-data", "post">;
     const data = {
       ...rest,
-      locations: { connect: { loc_id: locationId } },
+      locations: { connect: { loc_id } },
     } as Prisma.phosphate_dataCreateInput;
-    const record = await createRecord(data, locationId);
+    const record = await createRecord(data, loc_id);
     created(res, record, "Phosphate record created.", { id: record.id });
   } catch (err) {
     next(err);
@@ -63,19 +48,17 @@ export async function handleUpdatePhosphateData(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const id = requireUuidParam(req.params.id);
+    const { id } = req.params as PathParams<"/api/phosphate-data/{id}">;
 
     // A bare `loc_id` scalar isn't valid on the update input — map it to the nested
     // relation when present; leave the rest of the body untouched.
     const { loc_id, ...rest } = req.body as RequestBody<"/api/phosphate-data/{id}", "patch">;
-    const locationId = loc_id === undefined ? undefined : requireUuidField(loc_id, "loc_id");
-
     const data = {
       ...rest,
-      ...(locationId !== undefined ? { locations: { connect: { loc_id: locationId } } } : {}),
+      ...(loc_id !== undefined ? { locations: { connect: { loc_id } } } : {}),
     } as Prisma.phosphate_dataUpdateInput;
 
-    const record = await updateRecord(id, data, locationId);
+    const record = await updateRecord(id, data, loc_id);
     if (record === null) throw recordNotFound();
     ok(res, record, "Phosphate record updated.", { id });
   } catch (err) {
@@ -89,7 +72,8 @@ export async function handleDeletePhosphateData(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const record = await deleteRecord(requireUuidParam(req.params.id));
+    const { id } = req.params as PathParams<"/api/phosphate-data/{id}">;
+    const record = await deleteRecord(id);
     if (record === null) throw recordNotFound();
     noContent(res);
   } catch (err) {

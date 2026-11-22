@@ -2,7 +2,6 @@ import bcrypt from "bcryptjs";
 import { Prisma } from "../../generated/prisma/client";
 import {
   getAllUsers,
-  getUserById,
   createUser,
   updateUser,
   deleteUser,
@@ -11,6 +10,7 @@ import {
 } from "./users.queries";
 import { ApiError, InternalError, NotFoundError, ConflictError, BadRequestError } from "../http/api.error";
 import { ErrorCodes, type ErrorCode } from "../http/error.codes";
+import type { Schema } from "../http/contract";
 
 // `message` names the failed operation for the log; the client gets the
 // per-call-site publicMessage instead.
@@ -55,27 +55,11 @@ export async function listUsers(): Promise<SafeUser[]> {
   }
 }
 
-export async function getUser(id: string): Promise<SafeUser> {
-  try {
-    const user = await getUserById(id);
-    if (!user) throw new UserNotFoundError();
-    return user;
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    throw new UsersServiceError(
-      "Failed to fetch user",
-      err,
-      ErrorCodes.USERS_READ_FAILED,
-      "The user could not be retrieved.",
-    );
-  }
-}
-
 export async function createNewUser(body: {
   email: string;
   password: string;
   name?: string | null;
-  role?: string;
+  role?: Schema<"Role">;
 }): Promise<SafeUser> {
   try {
     const roleName = body.role ?? "volunteer";

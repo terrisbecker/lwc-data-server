@@ -862,8 +862,8 @@ components:
       required: [email, password]
       additionalProperties: false
       properties:
-        email: { type: string }
-        password: { type: string }
+        email: { type: string, minLength: 1 }
+        password: { type: string, minLength: 1 }
     LoginResult:
       type: object
       required: [token, user]
@@ -1170,8 +1170,8 @@ components:
       required: [email, password]
       additionalProperties: false
       properties:
-        email: { type: string }
-        password: { type: string }
+        email: { type: string, minLength: 1 }
+        password: { type: string, minLength: 1 }
         name: { $ref: "#/components/schemas/NullableText" }
         role: { $ref: "#/components/schemas/Role" }
     UserUpdate:

@@ -2,10 +2,10 @@ import type { components, paths } from "../types/openapi";
 
 /**
  * Type helpers over the types generated from openapi.yaml (`npm run openapi:types`).
- * Controllers type `req.body` from the contract instead of an inline cast, so a
- * spec change that breaks a handler shows up at compile time.
+ * Controllers type `req.body` and `req.params` from the contract instead of an
+ * inline cast, so a spec change that breaks a handler shows up at compile time.
  *
- * The request validator has already checked the body against the same schema by
+ * The request validator has already checked the request against the same schema by
  * the time a handler runs, so these types describe what actually arrives.
  */
 
@@ -19,4 +19,15 @@ export type RequestBody<P extends keyof paths, M extends Method> = paths[P][M] e
   requestBody?: { content: { "application/json": infer B } };
 }
   ? B
+  : never;
+
+/**
+ * The path parameters of a route, e.g. `PathParams<"/api/users/{id}">` → `{ id: string }`.
+ * Express types every param as `string | string[]`; the contract (`format: uuid`)
+ * has already narrowed it.
+ */
+export type PathParams<P extends keyof paths> = paths[P] extends {
+  parameters: { path: infer T };
+}
+  ? T
   : never;

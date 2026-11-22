@@ -1,6 +1,7 @@
 import * as OpenApiValidator from "express-openapi-validator";
 import { ApiError, BadRequestError } from "../http/api.error";
 import { ErrorCodes } from "../http/error.codes";
+import { JSON_BODY_LIMIT_LABEL } from "../http/limits";
 import { SPEC_PATH } from "./spec";
 
 /**
@@ -15,7 +16,7 @@ import { SPEC_PATH } from "./spec";
 export const validate = OpenApiValidator.middleware({
   apiSpec: SPEC_PATH,
   validateRequests: {
-    // Leave query strings as strings: `optionalBooleanQuery` expects "true"/"false".
+    // Leave query strings as strings: `optionalBooleanQuery` converts "true"/"false".
     coerceTypes: false,
     // Unknown query params (cache-busters like `?_=123`) are ignored, not rejected.
     allowUnknownQueryParameters: true,
@@ -57,11 +58,10 @@ function toIssue(raw: ValidatorIssue): Issue {
 }
 
 /**
- * Maps a validator error into the standard envelope, keeping the codes the
- * hand-written checks already return:
- *   - a UUID-format failure          → INVALID_ID   (path params: "Invalid id", as requireUuidParam)
- *   - a missing top-level body field → MISSING_FIELD
- *   - anything else                  → INVALID_FIELD
+ * Maps a validator error into the standard envelope:
+ *   - a UUID-format failure                   → INVALID_ID   (path params: "Invalid id")
+ *   - a missing or empty top-level body field → MISSING_FIELD
+ *   - anything else                           → INVALID_FIELD
  * Messages come from Ajv and name only the field and the expectation — never DB
  * internals. Returns undefined for anything that isn't a validator error.
  */
@@ -78,7 +78,7 @@ export function fromValidatorError(err: unknown): ApiError | undefined {
     return new ApiError("Request body rejected by contract as too large", {
       status: 413,
       code: ErrorCodes.PAYLOAD_TOO_LARGE,
-      publicMessage: "The request body is larger than the 1MB limit.",
+      publicMessage: `The request body is larger than the ${JSON_BODY_LIMIT_LABEL} limit.`,
       cause: err,
     });
   }
@@ -106,8 +106,14 @@ export function fromValidatorError(err: unknown): ApiError | undefined {
     });
   }
 
+  // `minLength: 1` on a required string means "present and non-empty", so an empty
+  // string is reported as missing, the same as an absent field.
   const missing = issues.find(
-    (i) => i.keyword === "required" && i.location === "body" && !i.field.includes("."),
+    (i) =>
+      i.location === "body" &&
+      !i.field.includes(".") &&
+      (i.keyword === "required" ||
+        (i.keyword === "minLength" && i.message.includes("fewer than 1 character"))),
   );
   if (missing) {
     return new BadRequestError(`${missing.field} is required`, {

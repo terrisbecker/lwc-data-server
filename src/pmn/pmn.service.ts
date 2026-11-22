@@ -7,12 +7,11 @@ import {
   deleteCombinedFieldDataById,
 } from "./pmn.queries";
 import { findConfirmedUploadsByIds } from "../uploads/uploads.queries";
-import { getPresignedGetUrl, MAX_FILES, type PresignedGetResult } from "../uploads/uploads.service";
+import { getPresignedGetUrl, type PresignedGetResult } from "../uploads/uploads.service";
 import { Prisma } from "../../generated/prisma/client";
 import type { pmn_combined_field_data } from "../../generated/prisma/client";
 import { InternalError, BadRequestError } from "../http/api.error";
 import { ErrorCodes, type ErrorCode } from "../http/error.codes";
-import { isUuid } from "../http/validate";
 
 // `message` names the failed operation for the log; the client sees publicMessage.
 export class PmnServiceError extends InternalError {
@@ -35,38 +34,20 @@ export class PmnValidationError extends BadRequestError {
   }
 }
 
+// Field types and the 10-photo cap are enforced by the contract, and the merged-in
+// existing row comes from the DB, so these are plain values here.
 interface ScumFields {
-  has_scum?: unknown;
-  scum_photos?: unknown;
-  photos?: unknown;
+  has_scum?: boolean;
+  scum_photos?: string[];
+  photos?: string[];
 }
 
 // Enforces scum invariants on the effective (post-merge) record and returns the
 // has_scum value to persist. Scum photos become publicly viewable, so every id
 // must be a confirmed image upload.
 async function validateScum(merged: ScumFields, hasScumProvided: boolean): Promise<boolean | undefined> {
-  const { scum_photos, photos } = merged;
-  let hasScum = merged.has_scum;
-
-  if (hasScum !== undefined && typeof hasScum !== "boolean") {
-    throw new PmnValidationError("has_scum must be a boolean", { field: "has_scum" });
-  }
-  if (scum_photos === undefined) return hasScum as boolean | undefined;
-
-  if (!Array.isArray(scum_photos) || scum_photos.some((id) => !isUuid(id))) {
-    throw new PmnValidationError("scum_photos must be an array of upload UUIDs", {
-      field: "scum_photos",
-      expected: "array of upload UUIDs",
-    });
-  }
-  if (scum_photos.length > MAX_FILES) {
-    throw new PmnValidationError(`Maximum ${MAX_FILES} scum photos per record`, {
-      field: "scum_photos",
-      max: MAX_FILES,
-      received: scum_photos.length,
-    });
-  }
-  if (scum_photos.length === 0) return hasScum as boolean | undefined;
+  const { has_scum: hasScum, scum_photos, photos } = merged;
+  if (!scum_photos || scum_photos.length === 0) return hasScum;
 
   if (hasScum === false) {
     throw new PmnValidationError(
@@ -76,15 +57,13 @@ async function validateScum(merged: ScumFields, hasScumProvided: boolean): Promi
       { field: "has_scum" },
     );
   }
-  hasScum = true;
-
-  if (Array.isArray(photos) && photos.some((id) => scum_photos.includes(id))) {
+  if (photos?.some((id) => scum_photos.includes(id))) {
     throw new PmnValidationError("An upload cannot appear in both photos and scum_photos", {
       field: "scum_photos",
     });
   }
 
-  const unique = [...new Set(scum_photos as string[])];
+  const unique = [...new Set(scum_photos)];
   let uploads;
   try {
     uploads = await findConfirmedUploadsByIds(unique);
@@ -122,7 +101,7 @@ export async function getCombinedFieldData(hasScum?: boolean): Promise<pmn_combi
 export async function createRecord(
   data: Prisma.pmn_combined_field_dataCreateInput,
 ): Promise<pmn_combined_field_data> {
-  const hasScum = await validateScum(data, data.has_scum !== undefined);
+  const hasScum = await validateScum(data as ScumFields, data.has_scum !== undefined);
   try {
     return await createCombinedFieldData(hasScum === undefined ? data : { ...data, has_scum: hasScum });
   } catch (cause) {
@@ -152,7 +131,7 @@ export async function updateRecord(
   }
   if (!existing) return null;
 
-  const hasScum = await validateScum({ ...existing, ...data }, data.has_scum !== undefined);
+  const hasScum = await validateScum({ ...existing, ...data } as ScumFields, data.has_scum !== undefined);
   const payload = hasScum === undefined ? data : { ...data, has_scum: hasScum };
 
   try {

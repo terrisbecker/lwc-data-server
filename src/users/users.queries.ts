@@ -13,13 +13,6 @@ export async function getAllUsers(): Promise<SafeUser[]> {
   });
 }
 
-export async function getUserById(id: string): Promise<SafeUser | null> {
-  return prisma.users.findUnique({
-    where: { id },
-    omit: omitPasswordHash,
-  });
-}
-
 export async function createUser(data: {
   email: string;
   password_hash: string;

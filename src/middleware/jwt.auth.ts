@@ -1,4 +1,3 @@
-import "dotenv/config";
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { UnauthorizedError } from "../http/api.error";
@@ -57,9 +56,8 @@ export function jwtAuth(req: Request, res: Response, next: NextFunction): void {
     };
     next();
   } catch (err) {
-    // Log why the token failed — the previous bare `catch {}` made an expired
-    // token indistinguishable from a tampered one in production. The token itself
-    // is never logged.
+    // Log why the token failed so an expired token can be told apart from a
+    // tampered one. The token itself is never logged.
     const name = err instanceof Error ? err.name : "UnknownError";
     const expired = name === "TokenExpiredError";
     console.error(
