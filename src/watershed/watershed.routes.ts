@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { validate } from "../openapi/validator";
 import { requireRole } from "../middleware/require.role";
 import {
   handleGetPhosphateData,
@@ -9,7 +10,7 @@ import {
 
 export const watershedRouter = Router();
 
-watershedRouter.get("/", handleGetPhosphateData);
-watershedRouter.post("/", requireRole("volunteer"), handleCreatePhosphateData);
-watershedRouter.patch("/:id", requireRole("admin"), handleUpdatePhosphateData);
-watershedRouter.delete("/:id", requireRole("admin"), handleDeletePhosphateData);
+watershedRouter.get("/", validate, handleGetPhosphateData);
+watershedRouter.post("/", requireRole("volunteer"), validate, handleCreatePhosphateData);
+watershedRouter.patch("/:id", requireRole("admin"), validate, handleUpdatePhosphateData);
+watershedRouter.delete("/:id", requireRole("admin"), validate, handleDeletePhosphateData);

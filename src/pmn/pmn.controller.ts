@@ -12,6 +12,7 @@ import { ok, created, noContent, list } from "../http/respond";
 import { requireUuidParam, optionalBooleanQuery } from "../http/validate";
 import { NotFoundError } from "../http/api.error";
 import { ErrorCodes } from "../http/error.codes";
+import type { RequestBody } from "../http/contract";
 
 const recordNotFound = () =>
   new NotFoundError("Record not found", { code: ErrorCodes.PMN_RECORD_NOT_FOUND });
@@ -42,8 +43,11 @@ export async function handleCreateCombinedFieldData(
 ): Promise<void> {
   try {
     // Strip `id` — the DB assigns the UUID via gen_random_uuid(); accepting a
-    // client-supplied id would allow callers to force a specific primary key.
-    const { id: _id, ...safeBody } = req.body as Record<string, unknown>;
+    // client-supplied id would allow callers to force a specific primary key. The
+    // contract already rejects `id`; this stays as defense in depth.
+    const { id: _id, ...safeBody } = req.body as RequestBody<"/api/pmn/combined-field-data", "post"> & {
+      id?: unknown;
+    };
     const data = await createRecord(safeBody as Prisma.pmn_combined_field_dataCreateInput);
     created(res, data, "PMN record created.", { id: data.id });
   } catch (err) {
@@ -58,7 +62,8 @@ export async function handleUpdateCombinedFieldData(
 ): Promise<void> {
   try {
     const id = requireUuidParam(req.params.id);
-    const record = await updateRecord(id, req.body as Prisma.pmn_combined_field_dataUpdateInput);
+    const body = req.body as RequestBody<"/api/pmn/combined-field-data/{id}", "patch">;
+    const record = await updateRecord(id, body as Prisma.pmn_combined_field_dataUpdateInput);
     if (record === null) throw recordNotFound();
     ok(res, record, "PMN record updated.", { id });
   } catch (err) {

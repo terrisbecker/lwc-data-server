@@ -5,6 +5,7 @@ import { ok, created, noContent, list } from "../http/respond";
 import { requireUuidParam, requireUuidField } from "../http/validate";
 import { NotFoundError, BadRequestError } from "../http/api.error";
 import { ErrorCodes } from "../http/error.codes";
+import type { RequestBody } from "../http/contract";
 
 const recordNotFound = () =>
   new NotFoundError("Record not found", { code: ErrorCodes.PHOSPHATE_RECORD_NOT_FOUND });
@@ -31,7 +32,11 @@ export async function handleCreatePhosphateData(
     // Strip `id` — the DB assigns the UUID; accepting a client-supplied id would
     // allow callers to force a specific primary key. Clients send a flat `loc_id`,
     // which we map to the nested relation Prisma expects.
-    const { id: _id, loc_id, ...rest } = req.body as Record<string, unknown>;
+    // The contract already rejects `id` and requires `loc_id`; both checks below
+    // stay as defense in depth.
+    const { id: _id, loc_id, ...rest } = req.body as RequestBody<"/api/phosphate-data", "post"> & {
+      id?: unknown;
+    };
 
     if (loc_id === undefined) {
       throw new BadRequestError("loc_id is required", {
@@ -62,7 +67,7 @@ export async function handleUpdatePhosphateData(
 
     // A bare `loc_id` scalar isn't valid on the update input — map it to the nested
     // relation when present; leave the rest of the body untouched.
-    const { loc_id, ...rest } = req.body as Record<string, unknown>;
+    const { loc_id, ...rest } = req.body as RequestBody<"/api/phosphate-data/{id}", "patch">;
     const locationId = loc_id === undefined ? undefined : requireUuidField(loc_id, "loc_id");
 
     const data = {

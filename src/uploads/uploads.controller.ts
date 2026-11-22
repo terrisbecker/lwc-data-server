@@ -15,6 +15,7 @@ import { ok, created, list } from "../http/respond";
 import { requireUuidParam, requireArray, requireUuidArray } from "../http/validate";
 import { BadRequestError, NotFoundError } from "../http/api.error";
 import { ErrorCodes } from "../http/error.codes";
+import type { RequestBody } from "../http/contract";
 
 const MAX_SIZE_LABEL = `${MAX_SIZE_BYTES / (1024 * 1024)}MB`;
 
@@ -24,7 +25,7 @@ export async function handleGeneratePresignedUrls(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { files } = req.body as { files?: unknown };
+    const { files } = req.body as RequestBody<"/api/uploads/presigned-urls", "post">;
 
     requireArray(files, "files", {
       max: MAX_FILES,
@@ -87,7 +88,7 @@ export async function handleConfirmUploads(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { uploadIds } = req.body as { uploadIds?: unknown };
+    const { uploadIds } = req.body as RequestBody<"/api/uploads/confirm", "post">;
 
     const ids = requireUuidArray(uploadIds, "uploadIds", {
       message: "uploadIds must be a non-empty array",

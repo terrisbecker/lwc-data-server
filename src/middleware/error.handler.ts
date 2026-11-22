@@ -4,6 +4,7 @@ import { ApiError, BadRequestError, ApiErrorOptions } from "../http/api.error";
 import { ErrorCodes, type ErrorCode } from "../http/error.codes";
 import { fail } from "../http/respond";
 import { logError } from "../http/log";
+import { fromValidatorError } from "../openapi/validator";
 
 /**
  * Body-parser failures. `express.json()` throws http-errors objects carrying a
@@ -37,6 +38,11 @@ const BODY_PARSER_ERRORS: Record<string, { status: number; code: ErrorCode; mess
 
 function toApiError(err: unknown): ApiError {
   if (err instanceof ApiError) return err;
+
+  // Contract (OpenAPI request validation) failures. Mapped before the generic 4xx
+  // branch below, which would otherwise flatten them into a detail-less 400.
+  const contractError = fromValidatorError(err);
+  if (contractError) return contractError;
 
   const type = (err as { type?: unknown } | null)?.type;
   if (typeof type === "string" && BODY_PARSER_ERRORS[type]) {

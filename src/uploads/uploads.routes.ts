@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { validate } from "../openapi/validator";
 import { requireRole } from "../middleware/require.role";
 import {
   handleGeneratePresignedUrls,
@@ -9,7 +10,7 @@ import {
 
 export const uploadsRouter = Router();
 
-uploadsRouter.post("/presigned-urls", requireRole("volunteer"), handleGeneratePresignedUrls);
-uploadsRouter.post("/confirm", requireRole("volunteer"), handleConfirmUploads);
-uploadsRouter.get("/:id/url", requireRole("volunteer"), handleGetPresignedGetUrl);
-uploadsRouter.get("/", requireRole("volunteer"), handleListUploads);
+uploadsRouter.post("/presigned-urls", requireRole("volunteer"), validate, handleGeneratePresignedUrls);
+uploadsRouter.post("/confirm", requireRole("volunteer"), validate, handleConfirmUploads);
+uploadsRouter.get("/:id/url", requireRole("volunteer"), validate, handleGetPresignedGetUrl);
+uploadsRouter.get("/", requireRole("volunteer"), validate, handleListUploads);

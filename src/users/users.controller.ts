@@ -4,6 +4,7 @@ import { ok, created, noContent, list } from "../http/respond";
 import { requireUuidParam, requireOneOf } from "../http/validate";
 import { BadRequestError } from "../http/api.error";
 import { ErrorCodes } from "../http/error.codes";
+import type { RequestBody } from "../http/contract";
 
 const VALID_ROLES = ["admin", "volunteer"] as const;
 
@@ -26,12 +27,7 @@ export async function handleCreateUser(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { email, password, name, role } = req.body as {
-      email: string;
-      password: string;
-      name?: string;
-      role?: string;
-    };
+    const { email, password, name, role } = req.body as RequestBody<"/api/users", "post">;
 
     if (!email || !password) {
       throw new BadRequestError("email and password are required", {
@@ -56,10 +52,7 @@ export async function handleUpdateUser(
 ): Promise<void> {
   try {
     const id = requireUuidParam(req.params.id);
-    const data = await patchUser(
-      id,
-      req.body as { email?: string; password?: string; name?: string; is_active?: boolean },
-    );
+    const data = await patchUser(id, req.body as RequestBody<"/api/users/{id}", "patch">);
     ok(res, data, "User updated.", { id });
   } catch (err) {
     next(err);

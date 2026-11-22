@@ -4,6 +4,7 @@ import { ok } from "../http/respond";
 import { requireString } from "../http/validate";
 import { BadRequestError } from "../http/api.error";
 import { ErrorCodes } from "../http/error.codes";
+import type { RequestBody } from "../http/contract";
 
 export async function handleLogin(
   req: Request,
@@ -11,7 +12,7 @@ export async function handleLogin(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { email, password } = req.body as { email: string; password: string };
+    const { email, password } = req.body as RequestBody<"/auth/login", "post">;
 
     if (!email || !password) {
       throw new BadRequestError("email and password are required", {

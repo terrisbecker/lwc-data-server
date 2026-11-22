@@ -1,0 +1,1191 @@
+openapi: 3.1.0
+info:
+  title: LWC Data API
+  version: 2.0.0
+  summary: Lacamas Watershed Council field and lab data.
+  description: |
+    The contract for the Lacamas Watershed Council data API. This file is the source of
+    truth: requests that don't match it are rejected with `400`, and
+    `npm run contract:check` keeps it in step with the code.
+
+    **Envelope.** Success bodies are `{ data, message?, meta? }`. Error bodies are
+    `{ error: { message, code, details?, requestId } }`. Branch on `error.code`,
+    never on the message text. `GET /`, `GET /health`, `GET /openapi.yaml` and
+    `GET /docs` are the only responses outside the envelope.
+
+    **Rate limits.** `/api` allows 100 requests per 15 minutes per IP and `/auth`
+    allows 10. Both return `429 RATE_LIMITED` with the standard `RateLimit-Limit`,
+    `RateLimit-Remaining` and `RateLimit-Reset` headers.
+
+    **Numbers and dates.** PMN `DECIMAL` columns serialize as JSON strings (for example
+    `"7.40"`) to preserve precision. `DATE` columns come back as
+    `2026-05-01T00:00:00.000Z` and `TIME` columns as `1970-01-01T08:30:00.000Z`.
+
+    **Auth.** Reads are open to guests. Send `Authorization: Bearer <token>` from
+    `POST /auth/login` for writes. A token that is present but invalid or expired is
+    always a `401`, even on a public route; it is never downgraded to guest. The
+    `x-required-role` field on each operation names the minimum role
+    (`volunteer` < `admin`).
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: https://api.lacamaswatershed.org
+    description: Production
+tags:
+  - name: Meta
+    description: Front page, health probe and this contract. Not enveloped.
+  - name: Auth
+    description: Exchange credentials for a JWT.
+  - name: PMN
+    description: Phytoplankton monitoring network (PMN) combined field data.
+  - name: Phosphate
+    description: Lab phosphate results with the sampling location joined in.
+  - name: Uploads
+    description: Presigned S3 uploads for record photos.
+  - name: Users
+    description: User administration.
+
+paths:
+  /:
+    get:
+      tags: [Meta]
+      operationId: getHome
+      summary: Front page
+      description: ASCII banner for terminals, HTML for browsers. Not enveloped.
+      security: []
+      responses:
+        "200":
+          description: The front page.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            text/plain:
+              schema: { type: string }
+            text/html:
+              schema: { type: string }
+
+  /health:
+    get:
+      tags: [Meta]
+      operationId: getHealth
+      summary: Liveness probe
+      description: Not enveloped, not authenticated, not rate limited.
+      security: []
+      responses:
+        "200":
+          description: The server is up.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /openapi.yaml:
+    get:
+      tags: [Meta]
+      operationId: getOpenApiSpec
+      summary: This contract
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /docs:
+    get:
+      tags: [Meta]
+      operationId: getDocs
+      summary: Browsable API docs
+      description: Redoc rendering of this contract.
+      security: []
+      responses:
+        "200":
+          description: HTML docs page.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            text/html:
+              schema: { type: string }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Log in
+      description: |
+        Returns a JWT valid for `JWT_EXPIRES_IN` (default 8 hours). There is no refresh
+        endpoint. Rate limited to 10 requests per 15 minutes per IP.
+
+        The `401` is deliberately identical for an unknown email and a wrong password.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Signed in.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/LoginResult" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: "`INVALID_CREDENTIALS`. The same body for an unknown email and a wrong password."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "403":
+          description: "`ACCOUNT_INACTIVE`."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/pmn/combined-field-data:
+    get:
+      tags: [PMN]
+      operationId: listPmnRecords
+      summary: List PMN records
+      description: All PMN records. `meta.count` is the row count; `meta.filters` echoes `hasScum` when given.
+      security: [{}, { bearerAuth: [] }]
+      parameters:
+        - name: hasScum
+          in: query
+          required: false
+          description: Keep only records with (`true`) or without (`false`) scum.
+          schema: { type: string, enum: ["true", "false"] }
+      responses:
+        "200":
+          description: The records.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PmnRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [PMN]
+      operationId: createPmnRecord
+      summary: Create a PMN record
+      description: |
+        Scum rules (`PMN_SCUM_RULE_VIOLATION`): a non-empty `scum_photos` forces
+        `has_scum` to `true`; every scum photo must be a confirmed `image/*` upload; an
+        upload cannot be in both `photos` and `scum_photos`.
+      security: [{ bearerAuth: [] }]
+      x-required-role: volunteer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PmnInput" }
+      responses:
+        "201":
+          description: Created. `meta.id` is the new record id.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PmnRecordResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/pmn/combined-field-data/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    patch:
+      tags: [PMN]
+      operationId: updatePmnRecord
+      summary: Update a PMN record
+      description: Partial update. The scum rules apply to the merged record.
+      security: [{ bearerAuth: [] }]
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PmnInput" }
+      responses:
+        "200":
+          description: Updated.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PmnRecordResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      tags: [PMN]
+      operationId: deletePmnRecord
+      summary: Delete a PMN record
+      security: [{ bearerAuth: [] }]
+      x-required-role: admin
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/pmn/scum-photos/{uploadId}/url:
+    parameters:
+      - name: uploadId
+        in: path
+        required: true
+        description: Upload id taken from a record's `scum_photos`.
+        schema: { type: string, format: uuid }
+    get:
+      tags: [PMN]
+      operationId: getScumPhotoUrl
+      summary: Presigned URL for a scum photo
+      description: |
+        Public. An upload is served only while some PMN record lists it in
+        `scum_photos`. `meta.expiresInSeconds` is the URL lifetime.
+      security: [{}, { bearerAuth: [] }]
+      responses:
+        "200":
+          description: URL issued.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresignedGetResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: |
+            `PMN_SCUM_PHOTO_NOT_FOUND`, with no `details`. Deliberately the same for an
+            unknown upload and for an upload that isn't a scum photo.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/phosphate-data:
+    get:
+      tags: [Phosphate]
+      operationId: listPhosphateRecords
+      summary: List phosphate records
+      security: [{}, { bearerAuth: [] }]
+      responses:
+        "200":
+          description: The records, each with `locations` joined.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PhosphateRecord" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [Phosphate]
+      operationId: createPhosphateRecord
+      summary: Create a phosphate record
+      description: "`loc_id` must name an existing location, or the response is `400 PHOSPHATE_LOCATION_UNKNOWN`."
+      security: [{ bearerAuth: [] }]
+      x-required-role: volunteer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PhosphateCreate" }
+      responses:
+        "201":
+          description: Created. `meta.id` is the new record id.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhosphateRecordResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/phosphate-data/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    patch:
+      tags: [Phosphate]
+      operationId: updatePhosphateRecord
+      summary: Update a phosphate record
+      description: Partial update.
+      security: [{ bearerAuth: [] }]
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PhosphateUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhosphateRecordResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      tags: [Phosphate]
+      operationId: deletePhosphateRecord
+      summary: Delete a phosphate record
+      security: [{ bearerAuth: [] }]
+      x-required-role: admin
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/uploads:
+    get:
+      tags: [Uploads]
+      operationId: listUploads
+      summary: List your uploads
+      description: Your own confirmed uploads, newest first.
+      security: [{ bearerAuth: [] }]
+      x-required-role: volunteer
+      responses:
+        "200":
+          description: The uploads.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Upload" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/uploads/presigned-urls:
+    post:
+      tags: [Uploads]
+      operationId: createPresignedUploadUrls
+      summary: Request presigned PUT URLs
+      description: |
+        Up to 10 files per call, each 1 byte to 10 MB. PUT the raw bytes to each
+        `presignedUrl` with the declared `Content-Type`, then call `/api/uploads/confirm`.
+        `meta.expiresInSeconds` is the URL lifetime.
+      security: [{ bearerAuth: [] }]
+      x-required-role: volunteer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PresignRequest" }
+      responses:
+        "201":
+          description: URLs issued.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PresignedPut" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/uploads/confirm:
+    post:
+      tags: [Uploads]
+      operationId: confirmUploads
+      summary: Confirm finished uploads
+      description: |
+        Marks your uploads confirmed. Ids that don't exist or aren't yours are skipped,
+        and the response is still `200`; `meta.requested`, `meta.confirmed` and
+        `meta.skipped` show the shortfall.
+      security: [{ bearerAuth: [] }]
+      x-required-role: volunteer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfirmRequest" }
+      responses:
+        "200":
+          description: Confirmed.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: "#/components/schemas/ConfirmResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/uploads/{id}/url:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    get:
+      tags: [Uploads]
+      operationId: getUploadUrl
+      summary: Presigned URL for any upload
+      description: "`meta.expiresInSeconds` is the URL lifetime."
+      security: [{ bearerAuth: [] }]
+      x-required-role: volunteer
+      responses:
+        "200":
+          description: URL issued.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresignedGetResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/users:
+    get:
+      tags: [Users]
+      operationId: listUsers
+      summary: List users
+      security: [{ bearerAuth: [] }]
+      x-required-role: admin
+      responses:
+        "200":
+          description: All users, oldest first. Never includes password hashes.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      tags: [Users]
+      operationId: createUser
+      summary: Create a user
+      description: "`role` defaults to `volunteer`."
+      security: [{ bearerAuth: [] }]
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserCreate" }
+      responses:
+        "201":
+          description: Created. `meta.id` is the new user id.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /api/users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    patch:
+      tags: [Users]
+      operationId: updateUser
+      summary: Update a user
+      description: Partial update. Roles can't be changed here.
+      security: [{ bearerAuth: [] }]
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserUpdate" }
+      responses:
+        "200":
+          description: Updated.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      tags: [Users]
+      operationId: deleteUser
+      summary: Delete a user
+      security: [{ bearerAuth: [] }]
+      x-required-role: admin
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Token from `POST /auth/login`. Payload: `{ sub, email, roles }`."
+
+  headers:
+    X-Request-Id:
+      description: Correlation id, repeated as `error.requestId` on errors. Quote it when reporting a 500.
+      schema: { type: string }
+
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      description: Record id. A non-UUID is `400 INVALID_ID`.
+      schema: { type: string, format: uuid }
+
+  responses:
+    NoContent:
+      description: Deleted. No body.
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+    BadRequest:
+      description: |
+        The request didn't match the contract or a business rule. Codes:
+        `MALFORMED_JSON`, `MISSING_FIELD`, `INVALID_FIELD`, `INVALID_ID`, and per
+        feature `PMN_SCUM_RULE_VIOLATION`, `PHOSPHATE_LOCATION_UNKNOWN`,
+        `USER_ROLE_UNKNOWN`. Contract failures put
+        `{ errors: [{ field, message }] }` in `details`.
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Unauthorized:
+      description: "`UNAUTHORIZED` (no token on a protected route), `TOKEN_INVALID` or `TOKEN_EXPIRED`. The message is always `Unauthorized`."
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: "`FORBIDDEN`: the token's role is below the operation's `x-required-role`."
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    NotFound:
+      description: "`PMN_RECORD_NOT_FOUND`, `PHOSPHATE_RECORD_NOT_FOUND`, `USER_NOT_FOUND` or `UPLOAD_NOT_FOUND`. Unknown routes are `ROUTE_NOT_FOUND`."
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Conflict:
+      description: "`USER_EMAIL_TAKEN`."
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    PayloadTooLarge:
+      description: "`PAYLOAD_TOO_LARGE`: the JSON body is over 1 MB."
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    TooManyRequests:
+      description: "`RATE_LIMITED`."
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+        RateLimit-Limit:
+          description: Requests allowed per window.
+          schema: { type: integer }
+        RateLimit-Remaining:
+          description: Requests left in the current window.
+          schema: { type: integer }
+        RateLimit-Reset:
+          description: Seconds until the window resets.
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    InternalError:
+      description: |
+        Server-side failure. `INTERNAL_ERROR` or a feature code such as
+        `PMN_READ_FAILED`, `UPLOADS_PRESIGN_FAILED` or `AUTH_LOGIN_FAILED`. Never
+        carries `details`.
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/X-Request-Id" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  schemas:
+    # ---------- envelope ----------
+    SuccessEnvelope:
+      type: object
+      description: Every success body. `data` is typed per operation.
+      required: [data]
+      properties:
+        data: {}
+        message:
+          type: string
+          description: Human-readable summary. Omitted when there is nothing to say.
+        meta: { $ref: "#/components/schemas/Meta" }
+    Meta:
+      type: object
+      description: "`count` on lists, `id` on writes, `filters` when a filter applied, `expiresInSeconds` on presigned URLs."
+      properties:
+        count: { type: integer, minimum: 0 }
+        id: { type: string, format: uuid }
+        filters: { type: object }
+        expiresInSeconds: { type: integer }
+        requested: { type: integer }
+        confirmed: { type: integer }
+        skipped: { type: integer }
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [message, code, requestId]
+          additionalProperties: false
+          properties:
+            message:
+              type: string
+              description: Safe for display. Don't branch on it.
+            code: { $ref: "#/components/schemas/ErrorCode" }
+            details:
+              description: Client-safe context such as field names. Never present on 5xx.
+            requestId: { type: string }
+    ErrorCode:
+      type: string
+      description: Stable machine-readable error code. Append-only.
+      enum:
+        - ROUTE_NOT_FOUND
+        - MALFORMED_JSON
+        - PAYLOAD_TOO_LARGE
+        - UNSUPPORTED_MEDIA_TYPE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - INVALID_ID
+        - MISSING_FIELD
+        - INVALID_FIELD
+        - UNAUTHORIZED
+        - TOKEN_INVALID
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - INVALID_CREDENTIALS
+        - ACCOUNT_INACTIVE
+        - AUTH_LOGIN_FAILED
+        - PMN_SCUM_RULE_VIOLATION
+        - PMN_RECORD_NOT_FOUND
+        - PMN_SCUM_PHOTO_NOT_FOUND
+        - PMN_READ_FAILED
+        - PMN_CREATE_FAILED
+        - PMN_UPDATE_FAILED
+        - PMN_DELETE_FAILED
+        - PMN_SCUM_LOOKUP_FAILED
+        - PHOSPHATE_RECORD_NOT_FOUND
+        - PHOSPHATE_LOCATION_UNKNOWN
+        - PHOSPHATE_READ_FAILED
+        - PHOSPHATE_CREATE_FAILED
+        - PHOSPHATE_UPDATE_FAILED
+        - PHOSPHATE_DELETE_FAILED
+        - USER_NOT_FOUND
+        - USER_EMAIL_TAKEN
+        - USER_ROLE_UNKNOWN
+        - USERS_READ_FAILED
+        - USERS_CREATE_FAILED
+        - USERS_UPDATE_FAILED
+        - USERS_DELETE_FAILED
+        - UPLOAD_NOT_FOUND
+        - UPLOADS_PRESIGN_FAILED
+        - UPLOADS_CONFIRM_FAILED
+        - UPLOADS_DOWNLOAD_URL_FAILED
+        - UPLOADS_LIST_FAILED
+
+    # ---------- shared scalars ----------
+    Decimal:
+      type: [string, "null"]
+      description: PostgreSQL DECIMAL serialized as a string to keep precision.
+      examples: ["8.8"]
+    DecimalInput:
+      type: [number, string, "null"]
+      description: A number, or a numeric string to keep precision.
+    DateTime:
+      type: string
+      format: date-time
+    NullableDateTime:
+      type: [string, "null"]
+      format: date-time
+      description: "DATE columns: `2026-05-01T00:00:00.000Z`. TIME columns: `1970-01-01T08:30:00.000Z`."
+    DateInput:
+      type: [string, "null"]
+      description: ISO-8601 date-time string, for example `2026-05-01T00:00:00.000Z` (or `1970-01-01T08:30:00.000Z` for a time).
+    NullableText:
+      type: [string, "null"]
+    UploadIds:
+      type: array
+      description: Upload ids.
+      items: { type: string }
+
+    # ---------- meta ----------
+    Health:
+      type: object
+      required: [status, uptime, timestamp]
+      properties:
+        status: { type: string, const: ok }
+        uptime: { type: number, description: Process uptime in seconds. }
+        timestamp: { $ref: "#/components/schemas/DateTime" }
+
+    # ---------- auth ----------
+    LoginRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: { type: string }
+        password: { type: string }
+    LoginResult:
+      type: object
+      required: [token, user]
+      properties:
+        token: { type: string, description: JWT for the Authorization header. }
+        user:
+          type: object
+          required: [id, email, roles]
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string }
+            roles:
+              type: array
+              items: { type: string }
+
+    # ---------- pmn ----------
+    PmnRecord:
+      type: object
+      description: |
+        A PMN record. Every column except `id` and `has_scum` is nullable; null means
+        the value wasn't collected. Units are not stored anywhere in this dataset; they
+        follow the instruments LWC volunteers use, so confirm them with LWC before
+        publishing derived figures.
+      required:
+        - id
+        - sample_date
+        - sample_time
+        - sampling_site
+        - air_temperature
+        - weather
+        - wind_direction
+        - wind_speed
+        - barometeric_pressure
+        - water_temperature
+        - ph
+        - dissolved_oxygen
+        - conductivity
+        - total_dissolved_solids
+        - salt_ppt
+        - aphanizomenon
+        - dolichospermum
+        - microcystis
+        - planktothrix
+        - raphidiopsis
+        - woronichinia
+        - secchi
+        - general_comments
+        - photos
+        - has_scum
+        - scum_photos
+      properties:
+        id: { type: string, format: uuid }
+        sample_date: { $ref: "#/components/schemas/NullableDateTime", description: "When the sample was taken. Use the date half only." }
+        sample_time: { $ref: "#/components/schemas/NullableDateTime", description: "Local clock time in the field (Pacific). Use the time half only; the 1970 date is a placeholder." }
+        sampling_site: { $ref: "#/components/schemas/NullableText" }
+        air_temperature: { $ref: "#/components/schemas/Decimal", description: "Unit not recorded in the schema; confirm with LWC." }
+        weather: { $ref: "#/components/schemas/NullableText" }
+        wind_direction: { $ref: "#/components/schemas/NullableText", description: "Free text, e.g. `NW`." }
+        wind_speed: { $ref: "#/components/schemas/NullableText", description: "Free text, e.g. `5-10 mph`." }
+        barometeric_pressure: { $ref: "#/components/schemas/Decimal", description: "Barometric pressure. The misspelled name is kept so existing downloads keep working." }
+        water_temperature: { $ref: "#/components/schemas/Decimal", description: "Unit not recorded in the schema; confirm with LWC." }
+        ph: { $ref: "#/components/schemas/Decimal", description: "pH units." }
+        dissolved_oxygen: { $ref: "#/components/schemas/Decimal", description: "Unit not recorded in the schema; confirm with LWC." }
+        conductivity: { $ref: "#/components/schemas/Decimal", description: "Unit not recorded in the schema; confirm with LWC." }
+        total_dissolved_solids: { $ref: "#/components/schemas/Decimal", description: "Unit not recorded in the schema; confirm with LWC." }
+        salt_ppt: { $ref: "#/components/schemas/Decimal", description: "Salinity, parts per thousand." }
+        aphanizomenon: { $ref: "#/components/schemas/NullableText", description: "Cyanobacteria genus abundance: Yes, No or Elevated (free text)." }
+        dolichospermum: { $ref: "#/components/schemas/NullableText", description: "Cyanobacteria genus abundance: Yes, No or Elevated (free text)." }
+        microcystis: { $ref: "#/components/schemas/NullableText", description: "Cyanobacteria genus abundance: Yes, No or Elevated (free text)." }
+        planktothrix: { $ref: "#/components/schemas/NullableText", description: "Cyanobacteria genus abundance: Yes, No or Elevated (free text)." }
+        raphidiopsis: { $ref: "#/components/schemas/NullableText", description: "Cyanobacteria genus abundance: Yes, No or Elevated (free text)." }
+        woronichinia: { $ref: "#/components/schemas/NullableText", description: "Cyanobacteria genus abundance: Yes, No or Elevated (free text)." }
+        secchi: { $ref: "#/components/schemas/Decimal", description: "Secchi-disk depth (water clarity). Unit not recorded in the schema." }
+        general_comments: { $ref: "#/components/schemas/NullableText" }
+        photos: { $ref: "#/components/schemas/UploadIds", description: "Upload ids of general photos. Viewing them requires an account." }
+        has_scum: { type: boolean, description: "Surface scum (possible harmful algal bloom) observed. Always true when scum_photos is non-empty." }
+        scum_photos: { $ref: "#/components/schemas/UploadIds", description: "Upload ids of scum photos. Publicly viewable via /api/pmn/scum-photos/{uploadId}/url." }
+    PmnInput:
+      type: object
+      description: |
+        Body for create and partial update; every field is optional. Unknown fields,
+        including `id`, are rejected.
+
+        Scum rules (checked against the merged record on PATCH; violations are
+        `400 PMN_SCUM_RULE_VIOLATION`):
+        - A non-empty `scum_photos` forces `has_scum` to `true`. Omit `has_scum` and the
+          server sets it; sending `false` alongside photos is rejected. To clear scum,
+          send `{ "has_scum": false, "scum_photos": [] }`.
+        - `has_scum: true` with no photos is fine (scum seen, no photo taken).
+        - An upload can't be in both `photos` and `scum_photos`.
+        - Every scum photo must be a confirmed `image/*` upload. Adding one makes that
+          image publicly viewable.
+      additionalProperties: false
+      properties:
+        sample_date: { $ref: "#/components/schemas/DateInput" }
+        sample_time: { $ref: "#/components/schemas/DateInput" }
+        sampling_site: { $ref: "#/components/schemas/NullableText" }
+        air_temperature: { $ref: "#/components/schemas/DecimalInput" }
+        weather: { $ref: "#/components/schemas/NullableText" }
+        wind_direction: { $ref: "#/components/schemas/NullableText" }
+        wind_speed: { $ref: "#/components/schemas/NullableText" }
+        barometeric_pressure: { $ref: "#/components/schemas/DecimalInput" }
+        water_temperature: { $ref: "#/components/schemas/DecimalInput" }
+        ph: { $ref: "#/components/schemas/DecimalInput" }
+        dissolved_oxygen: { $ref: "#/components/schemas/DecimalInput" }
+        conductivity: { $ref: "#/components/schemas/DecimalInput" }
+        total_dissolved_solids: { $ref: "#/components/schemas/DecimalInput" }
+        salt_ppt: { $ref: "#/components/schemas/DecimalInput" }
+        aphanizomenon: { $ref: "#/components/schemas/NullableText" }
+        dolichospermum: { $ref: "#/components/schemas/NullableText" }
+        microcystis: { $ref: "#/components/schemas/NullableText" }
+        planktothrix: { $ref: "#/components/schemas/NullableText" }
+        raphidiopsis: { $ref: "#/components/schemas/NullableText" }
+        woronichinia: { $ref: "#/components/schemas/NullableText" }
+        secchi: { $ref: "#/components/schemas/DecimalInput" }
+        general_comments: { $ref: "#/components/schemas/NullableText" }
+        photos: { $ref: "#/components/schemas/UploadIds" }
+        has_scum: { type: boolean }
+        scum_photos:
+          type: array
+          description: Upload ids of confirmed image uploads. Publicly viewable.
+          maxItems: 10
+          items: { type: string, format: uuid }
+    PmnRecordResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessEnvelope"
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: "#/components/schemas/PmnRecord" }
+
+    # ---------- phosphate ----------
+    Location:
+      type: object
+      required: [loc_id, loc_name, latitude, longitude, description]
+      properties:
+        loc_id: { type: string, format: uuid }
+        loc_name: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        description: { $ref: "#/components/schemas/NullableText" }
+    PhosphateRecord:
+      type: object
+      description: A lab phosphate result. Numeric columns are double precision and arrive as JSON numbers; `notes` is the only nullable column.
+      required:
+        - id
+        - lab_case_file_number
+        - loc_id
+        - measurement_date
+        - measurement_time
+        - analysis_date
+        - analyte_id
+        - analyte_level
+        - unit
+        - notes
+        - photos
+        - locations
+      properties:
+        id: { type: string, format: uuid }
+        lab_case_file_number: { type: integer, description: Lab case/file number. }
+        loc_id: { type: string, format: uuid }
+        measurement_date: { $ref: "#/components/schemas/DateTime" }
+        measurement_time: { $ref: "#/components/schemas/DateTime" }
+        analysis_date: { $ref: "#/components/schemas/DateTime" }
+        analyte_id: { type: string, description: "Analyte code, e.g. `TOTAL-P`." }
+        analyte_level: { type: number, description: "Measured concentration, in `unit`." }
+        unit: { type: string, description: "Unit for `analyte_level`, e.g. `mg/L`." }
+        notes: { $ref: "#/components/schemas/NullableText" }
+        photos: { $ref: "#/components/schemas/UploadIds" }
+        locations: { $ref: "#/components/schemas/Location", description: "The sampling site, joined in. Read-only; send a flat `loc_id` on writes." }
+    PhosphateCreate:
+      type: object
+      description: Unknown fields, including `id` and `locations`, are rejected.
+      additionalProperties: false
+      required:
+        - lab_case_file_number
+        - loc_id
+        - measurement_date
+        - measurement_time
+        - analysis_date
+        - analyte_id
+        - analyte_level
+        - unit
+      properties:
+        lab_case_file_number: { type: integer }
+        loc_id: { type: string, format: uuid, description: "Sampling location. Sent flat, not nested." }
+        measurement_date: { type: string, description: ISO-8601 date-time string. }
+        measurement_time: { type: string, description: "ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`." }
+        analysis_date: { type: string, description: ISO-8601 date-time string. }
+        analyte_id: { type: string, maxLength: 50 }
+        analyte_level: { type: number }
+        unit: { type: string, maxLength: 50 }
+        notes: { $ref: "#/components/schemas/NullableText" }
+        photos: { $ref: "#/components/schemas/UploadIds" }
+    PhosphateUpdate:
+      type: object
+      description: Partial update with the same fields as PhosphateCreate, all optional.
+      additionalProperties: false
+      properties:
+        lab_case_file_number: { type: integer }
+        loc_id: { type: string, format: uuid, description: "Sampling location. Sent flat, not nested." }
+        measurement_date: { type: string, description: ISO-8601 date-time string. }
+        measurement_time: { type: string, description: "ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`." }
+        analysis_date: { type: string, description: ISO-8601 date-time string. }
+        analyte_id: { type: string, maxLength: 50 }
+        analyte_level: { type: number }
+        unit: { type: string, maxLength: 50 }
+        notes: { $ref: "#/components/schemas/NullableText" }
+        photos: { $ref: "#/components/schemas/UploadIds" }
+    PhosphateRecordResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessEnvelope"
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: "#/components/schemas/PhosphateRecord" }
+
+    # ---------- uploads ----------
+    Upload:
+      type: object
+      required: [id, user_id, original_name, object_key, content_type, size_bytes, status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        original_name: { type: string }
+        object_key: { type: string }
+        content_type: { type: string }
+        size_bytes: { type: integer }
+        status: { type: string, examples: [confirmed] }
+        created_at: { $ref: "#/components/schemas/DateTime" }
+        updated_at: { $ref: "#/components/schemas/DateTime" }
+    UploadContentType:
+      type: string
+      enum: [image/jpeg, image/png, image/webp, image/gif, application/pdf]
+    PresignRequest:
+      type: object
+      required: [files]
+      additionalProperties: false
+      properties:
+        files:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            type: object
+            required: [filename, contentType, sizeBytes]
+            additionalProperties: false
+            properties:
+              filename: { type: string }
+              contentType: { $ref: "#/components/schemas/UploadContentType" }
+              sizeBytes: { type: integer, minimum: 1, maximum: 10485760 }
+    PresignedPut:
+      type: object
+      required: [uploadId, presignedUrl, objectKey]
+      properties:
+        uploadId: { type: string, format: uuid }
+        presignedUrl: { type: string, format: uri }
+        objectKey: { type: string }
+    ConfirmRequest:
+      type: object
+      required: [uploadIds]
+      additionalProperties: false
+      properties:
+        uploadIds:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+    ConfirmResult:
+      type: object
+      required: [confirmed]
+      properties:
+        confirmed: { type: integer, minimum: 0 }
+    PresignedGet:
+      type: object
+      required: [url, contentType, originalName]
+      properties:
+        url: { type: string, format: uri }
+        contentType: { type: string }
+        originalName: { type: string }
+    PresignedGetResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessEnvelope"
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: "#/components/schemas/PresignedGet" }
+
+    # ---------- users ----------
+    Role:
+      type: string
+      enum: [admin, volunteer]
+    User:
+      type: object
+      required: [id, email, name, is_active, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        name: { $ref: "#/components/schemas/NullableText" }
+        is_active: { type: boolean }
+        created_at: { $ref: "#/components/schemas/DateTime" }
+        updated_at: { $ref: "#/components/schemas/DateTime" }
+    UserCreate:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: { type: string }
+        password: { type: string }
+        name: { $ref: "#/components/schemas/NullableText" }
+        role: { $ref: "#/components/schemas/Role" }
+    UserUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        email: { type: string }
+        password: { type: string }
+        name: { $ref: "#/components/schemas/NullableText" }
+        is_active: { type: boolean }
+    UserResponse:
+      allOf:
+        - $ref: "#/components/schemas/SuccessEnvelope"
+        - type: object
+          required: [data]
+          properties:
+            data: { $ref: "#/components/schemas/User" }

@@ -1,6 +1,6 @@
 # LWC Data Server
 
-**Version:** 1.1.0
+**Version:** 2.0.0
 
 The HTTP/JSON API behind the Lacamas Watershed Council's (LWC) field-monitoring
 data. It publishes the observations LWC volunteers and staff collect on Lacamas
@@ -17,7 +17,7 @@ Two datasets are served today:
 
 **Production API:** `https://api.lacamaswatershed.org`
 
-Reading data is **open to the public — no account, no key, no registration.** All API requests are rate limited to block bots from causing congestion on the server.
+Reading data is **open to the public.** All API requests are rate limited to block bots from causing congestion on the server.
 An account is only needed to *submit* data.
 
 ### Which part of this document do I want?
@@ -145,8 +145,8 @@ Some useful tips if this is your first time accessing the data:
    preserved for now so existing downloads keep working. It is barometric
    pressure, and will be fixed in an upcoming update.
 
-See the [data dictionary](#data-dictionary) in Part 3 for every field, its type,
-and its units.
+The [API docs](https://api.lacamaswatershed.org/docs) describe every field, its type,
+and its units (open a `PmnRecord` or `PhosphateRecord` schema).
 
 ## Scum observations and photographs
 
@@ -212,8 +212,8 @@ administrator creates for you — there is no self-service signup. Two levels ex
 - **Administrator** — may additionally edit and delete records and manage accounts.
 
 Once you have credentials, exchange them for a token (valid 8 hours) and send it on
-each write. See [Authentication](#authentication) and the
-[endpoint reference](#endpoints) in Part 3 for the exact calls.
+each write. See [Authentication and roles](#authentication-and-roles) in Part 3 and
+the [API docs](https://api.lacamaswatershed.org/docs) for the exact calls.
 
 ## When something goes wrong
 
@@ -232,7 +232,8 @@ Errors come back in a consistent shape:
 
 `message` says what to fix. If you report a problem to LWC, **include the
 `requestId`** because it identifies the exact request in the server logs. The
-[error-code table](#error-codes) lists every code and what it means.
+[API docs](https://api.lacamaswatershed.org/docs) list every error code each
+endpoint can return.
 
 ---
 
@@ -308,6 +309,11 @@ npm run build           # tsc → dist/
 npm start               # node dist/src/index.js (run build first)
 npm run seed            # roles, permissions, admin user — idempotent
 npm run seed:locations  # sampling locations for watershed_field_data
+
+npm run openapi:lint    # lint openapi.yaml (Redocly)
+npm run openapi:types   # regenerate src/types/openapi.d.ts from openapi.yaml
+npm run contract:check  # drift check: spec vs routes, roles, error codes, types
+npm run contract        # lint + drift check — run before every PR
 ```
 
 ## Environment
@@ -388,10 +394,25 @@ Conventions worth knowing before you open a PR:
 - **Validation helpers throw** `BadRequestError`; controllers contain no
   `res.status(400)`.
 - Run `npx prisma generate` after any schema change; the client is gitignored.
+- **`openapi.yaml` is the contract.** Requests are validated against it, so a route
+  change means: update the spec, add `validate` to the route (after `requireRole`),
+  run `npm run openapi:types`, then `npm run contract`. Controllers type `req.body`
+  with `RequestBody<path, method>` from `src/http/contract.ts`.
 
-**There is no automated test suite.** `"test": "test"` in `package.json` is a
-placeholder and `scripts/` holds only `deploy.sh`. Verify changes manually with the
-curl examples in [Part 3](#part-3--api-reference) and say in the PR what you ran.
+**There is no unit test suite.** `"test": "test"` in `package.json` is a
+placeholder. `npm run contract` is the automated check: it lints the spec and diffs
+it against the routes, roles, error codes and generated types. Point it at a running
+server for read-only live checks too:
+
+```bash
+BASE_URL=http://localhost:3001 npm run contract:check
+# also log in and check volunteer/admin GETs:
+BASE_URL=http://localhost:3001 CONTRACT_EMAIL=… CONTRACT_PASSWORD=… npm run contract:check
+```
+
+Verify write paths manually against a local server (request bodies are in the
+[API docs](https://api.lacamaswatershed.org/docs), or `/docs` locally) and say in the
+PR what you ran.
 
 ## Deployment
 
@@ -402,581 +423,104 @@ EC2, PM2, nginx, Let's Encrypt TLS, and running migrations against RDS.
 
 # Part 3 — API reference
 
+**The full reference is the OpenAPI contract, browsable at
+[api.lacamaswatershed.org/docs](https://api.lacamaswatershed.org/docs).** It lists
+every endpoint, request body, response shape, field description and error code. The
+raw OpenAPI 3.1 file is at
+[`/openapi.yaml`](https://api.lacamaswatershed.org/openapi.yaml), so you can
+generate a client from it rather than hand-writing request types. The contract is
+enforced: a request that doesn't match it is rejected with `400`.
+
+This section covers only what a contract can't express well: the conventions that
+apply everywhere, the multi-step flows, and the known gaps.
+
 ## Conventions
 
-- **Base URL:** `https://api.lacamaswatershed.org` in production;
-  `http://localhost:3001` for a local server, matching `.env.example` (the code
-  default when `PORT` is unset is `3000`). The examples below use the local URL —
-  substitute the production host as needed.
-- **Success envelope:** `{ "data": <payload>, "message"?: "…", "meta"?: { … } }`.
-  `message` and `meta` are omitted when there is nothing to say. `meta` carries
-  `count` on list responses, `id` on writes, `filters` when a filter was applied,
-  and `expiresInSeconds` on presigned-URL responses.
-- **Error envelope:** `{ "error": { "message", "code", "details"?, "requestId" } }`.
-  **Branch on `error.code`**, never on the message text. Error bodies never contain
-  DB details, SQL, or stack traces.
-- **`GET /health` is the one un-enveloped response** — it returns
-  `{ "status", "uptime", "timestamp" }` directly so load-balancer probes can parse
-  it without unwrapping. It is also exempt from auth and rate limiting.
-- **CORS:** a browser origin must appear in the server's `CORS_ALLOWED_ORIGINS`
-  allowlist, or the request is rejected before it reaches a route. Only
-  `Content-Type` and `Authorization` are allowed as request headers. This does not
-  affect curl, R, Python, or Excel, which are not browsers.
-- **Rate limits:** two independent limiters, both per-IP and both returning `429`
-  `RATE_LIMITED` with standard `RateLimit-Limit` / `RateLimit-Remaining` /
-  `RateLimit-Reset` headers.
-  - `/api` — 100 requests / 15 min, tunable via `RATE_LIMIT_MAX` and
-    `RATE_LIMIT_WINDOW_MS`.
-  - `/auth` — **10 requests / 15 min**, hardcoded and not configurable. Budget login
-    retries accordingly.
-- **Request bodies** are JSON, capped at **1 MB**; over that yields `413`
-  `PAYLOAD_TOO_LARGE`. Invalid JSON yields `400` `MALFORMED_JSON`.
-- **Request ids:** every response carries an `X-Request-Id` header and every error
-  body repeats it as `error.requestId`. Quote it when reporting a `500` — it is the
-  key to the matching server log entry. A client-supplied `X-Request-Id` is honored
-  only if it matches `[A-Za-z0-9_-]{8,64}`.
-- **Numbers may arrive as strings.** PostgreSQL `DECIMAL` columns (all PMN
-  measurements) serialize as JSON strings like `"7.40"` to preserve precision; parse
-  them before doing math. Phosphate columns are `double precision` and do arrive as
-  JSON numbers.
-- **Dates and times are full ISO-8601 timestamps.** A `DATE` column becomes
-  `"2026-05-01T00:00:00.000Z"` — use only the date half. A `TIME` column becomes
-  `"1970-01-01T08:30:00.000Z"` — use only the time half and ignore the epoch date.
-- **Nearly every PMN field is nullable.** Only `id` and `has_scum` are guaranteed
-  present. Free-text fields (weather, wind, comments, the cyanobacteria genus
-  columns) have no fixed enum — render them defensively as text.
+- **Base URL:** `https://api.lacamaswatershed.org`. A local server listens on
+  `http://localhost:3001` (per `.env.example`).
+- **Envelope:** success is `{ data, message?, meta? }`; errors are
+  `{ error: { message, code, details?, requestId } }`. **Branch on `error.code`**,
+  never on the message. Codes are append-only, so they are safe to switch on.
+- **Request ids:** every response has an `X-Request-Id` header, repeated as
+  `error.requestId`. Quote it when reporting a problem; it identifies the request in
+  the server logs.
+- **Validation errors** are `400` with `details.errors` listing `{ field, message }`:
+  `MISSING_FIELD` for an absent required field, `INVALID_ID` where a UUID was
+  expected, `INVALID_FIELD` for anything else (including unknown fields such as
+  `id`). Writes must send `Content-Type: application/json` and stay under 1 MB.
+- **Rate limits** are per IP: 100 requests / 15 min on `/api` and **10 / 15 min on
+  `/auth`**. Both return `429 RATE_LIMITED`; wait for `RateLimit-Reset` seconds.
+- **Numbers and dates:** PMN measurements are exact decimals sent as strings
+  (`"7.40"`), while phosphate values are plain numbers. Dates and times are full
+  ISO-8601 timestamps; see [Reading the values correctly](#reading-the-values-correctly).
+- **CORS:** browser origins must be on the server's `CORS_ALLOWED_ORIGINS`
+  allowlist. curl, R, Python and Excel aren't affected.
 
-## Authentication
+## Authentication and roles
 
-`POST /auth/login` exchanges an email and password for a JWT. Send it on subsequent
-requests as `Authorization: Bearer <token>`.
-
-A missing header means guest access — reads still work. A malformed or expired
-token is a `401`; it is never silently downgraded to guest. The body is a flat
-`"Unauthorized"` in every auth failure, and only `error.code` distinguishes
-`TOKEN_EXPIRED` from `TOKEN_INVALID`. Tokens last `JWT_EXPIRES_IN` (default 8
-hours); there is no refresh endpoint, so log in again.
-
-## Roles & permissions
-
-| Role | GET data | POST data | PATCH data | DELETE data | Uploads | Manage users |
-| --- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **guest** (no token) | ✓ | — | — | — | — | — |
-| **volunteer** | ✓ | ✓ | — | — | ✓ | — |
-| **admin** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-
-"Guest" is the *absence* of a token rather than a role the API assigns: reads are
-open to anyone, and no credentials are needed for them. Guests cannot read uploads
-in general, with one deliberate exception — PMN scum photos, below. Only `admin`
-and `volunteer` can be assigned to a user account.
-
-## Endpoints
-
-| Method | Path | Auth | Purpose |
-| --- | --- | --- | --- |
-| `GET` | `/health` | public | Liveness probe. Un-enveloped, never rate-limited. |
-| `POST` | `/auth/login` | public | Exchange email + password for a JWT. |
-| `GET` | `/api/pmn/combined-field-data` | guest | All PMN records; optional `?hasScum=true` \| `false`. |
-| `POST` | `/api/pmn/combined-field-data` | volunteer | Create a PMN record. |
-| `PATCH` | `/api/pmn/combined-field-data/:id` | admin | Partially update a PMN record. |
-| `DELETE` | `/api/pmn/combined-field-data/:id` | admin | Delete a PMN record. |
-| `GET` | `/api/pmn/scum-photos/:uploadId/url` | **public** | Presigned GET URL for a scum photo. |
-| `GET` | `/api/phosphate-data` | guest | All phosphate records with `locations` joined. |
-| `POST` | `/api/phosphate-data` | volunteer | Create a phosphate record. |
-| `PATCH` | `/api/phosphate-data/:id` | admin | Partially update a phosphate record. |
-| `DELETE` | `/api/phosphate-data/:id` | admin | Delete a phosphate record. |
-| `POST` | `/api/uploads/presigned-urls` | volunteer | Request up to 10 presigned S3 PUT URLs. |
-| `POST` | `/api/uploads/confirm` | volunteer | Mark uploads confirmed after the PUTs succeed. |
-| `GET` | `/api/uploads/:id/url` | volunteer | Presigned GET URL for any one upload. |
-| `GET` | `/api/uploads` | volunteer | List your own confirmed uploads, newest first. |
-| `GET` | `/api/users` | admin | List all users (never includes password hashes). |
-| `POST` | `/api/users` | admin | Create a user. |
-| `PATCH` | `/api/users/:id` | admin | Update email, name, password, or `is_active`. |
-| `DELETE` | `/api/users/:id` | admin | Delete a user; the `user_roles` cascade cleans up. |
-
-`volunteer` means volunteer **or** admin. Writes respond `201` (POST) or `200`
-(PATCH) with the affected record in `data`; deletes respond `204` with no body.
-Every `:id` path parameter must be a UUID or the request fails `400` `INVALID_ID`.
-
-## Examples
-
-### Log in
+`POST /auth/login` exchanges an email and password for a JWT, valid for 8 hours with
+no refresh. Send it as `Authorization: Bearer <token>`:
 
 ```bash
-curl -X POST http://localhost:3001/auth/login \
+TOKEN=$(curl -s -X POST https://api.lacamaswatershed.org/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"..."}'
-```
-
-```json
-{
-  "data": {
-    "token": "<jwt>",
-    "user": { "id": "<uuid>", "email": "admin@example.com", "roles": ["admin"] }
-  },
-  "message": "Signed in."
-}
-```
-
-The `401` `INVALID_CREDENTIALS` response is byte-identical for an unknown email and
-a wrong password, so the endpoint cannot be used to discover registered addresses.
-A disabled account gets `403` `ACCOUNT_INACTIVE`.
-
-Capture the token for the calls below:
-
-```bash
-TOKEN=$(curl -s -X POST http://localhost:3001/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"..."}' \
+  -d '{"email":"you@example.com","password":"..."}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['token'])")
 ```
 
-### Read PMN records
+No header means guest access, and reads still work. A token that is present but
+malformed or expired is always `401` (`TOKEN_INVALID` / `TOKEN_EXPIRED`), even on a
+public route; it is never downgraded to guest.
+
+| Role | Read data | Create records | Edit / delete records | Uploads | Manage users |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| **guest** (no token) | ✓ | — | — | — | — |
+| **volunteer** | ✓ | ✓ | — | ✓ | — |
+| **admin** | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+Each operation in the docs names its minimum role as `x-required-role`. Guests can't
+view uploads, with one deliberate exception: PMN scum photos, served by
+`GET /api/pmn/scum-photos/{uploadId}/url` while a record lists them.
+
+## Uploading a photo
+
+Three steps. The file goes straight to S3 and never passes through this server.
 
 ```bash
-curl http://localhost:3001/api/pmn/combined-field-data
-curl "http://localhost:3001/api/pmn/combined-field-data?hasScum=true"
-```
+# 1. Request presigned URLs (up to 10 files, each up to 10 MB; the URLs last 5 minutes)
+curl -X POST https://api.lacamaswatershed.org/api/uploads/presigned-urls \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"files":[{"filename":"photo.jpg","contentType":"image/jpeg","sizeBytes":204800}]}'
 
-```json
-{
-  "data": [
-    {
-      "id": "b50a0722-0f82-489c-9b12-45825e07b949",
-      "sample_date": "2026-05-01T00:00:00.000Z",
-      "sample_time": "1970-01-01T08:30:00.000Z",
-      "sampling_site": "North Cove",
-      "air_temperature": "14.2",
-      "weather": "Partly Cloudy",
-      "wind_direction": "NW",
-      "wind_speed": "5-10 mph",
-      "barometeric_pressure": "1013.2",
-      "water_temperature": "12.8",
-      "ph": "7.4",
-      "dissolved_oxygen": "9.1",
-      "conductivity": "245",
-      "total_dissolved_solids": "163",
-      "salt_ppt": "0.12",
-      "aphanizomenon": "None",
-      "dolichospermum": "None",
-      "microcystis": "None",
-      "planktothrix": "None",
-      "raphidiopsis": "None",
-      "woronichinia": "None",
-      "secchi": "1.8",
-      "general_comments": "Calm conditions, good visibility.",
-      "photos": [],
-      "has_scum": false,
-      "scum_photos": []
-    }
-  ],
-  "message": "Retrieved PMN combined field data.",
-  "meta": { "count": 1 }
-}
-```
-
-`meta.filters.hasScum` is added when the filter is applied. Any `hasScum` value
-other than `true` or `false` is `400` `INVALID_FIELD`.
-
-### Create and update a PMN record
-
-Every field is optional — even `{}` is valid. The database assigns `id`, so never
-send one.
-
-```bash
-curl -X POST http://localhost:3001/api/pmn/combined-field-data \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"sampling_site":"North Cove","sample_date":"2026-07-01T00:00:00.000Z","ph":7.5}'
-
-curl -X PATCH http://localhost:3001/api/pmn/combined-field-data/<id> \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"general_comments":"Updated comment"}'
-```
-
-Both return the full record in `data`, with `meta.id`. Omitted fields default to
-`null`, `photos` and `scum_photos` to `[]`, and `has_scum` to `false`. PATCH changes
-only the fields present in the body. A missing `:id` is `404`
-`PMN_RECORD_NOT_FOUND`.
-
-#### Scum rules
-
-`has_scum` and `scum_photos` are validated on POST and PATCH, and on PATCH the check
-runs against the record **after** the merge. Violations are `400`
-`PMN_SCUM_RULE_VIOLATION`, with `details.field` naming the offender.
-
-- `has_scum` must be a boolean; `scum_photos` an array of upload UUIDs, at most 10.
-- A non-empty `scum_photos` forces `has_scum` to `true`. Omit `has_scum` and the
-  server sets it; send `has_scum: false` alongside photos and the request is
-  rejected. To clear scum, send `{ "has_scum": false, "scum_photos": [] }` together.
-- `has_scum: true` with no photos is fine — scum seen, no photo taken.
-- An upload id cannot appear in both `photos` and `scum_photos`.
-- Every scum photo must be a **confirmed `image/*` upload** (PDFs are rejected here
-  even though uploads accept them). Adding an id to `scum_photos` makes that image
-  **publicly viewable**.
-
-### Read a scum photo without logging in
-
-```bash
-curl http://localhost:3001/api/pmn/scum-photos/<uploadId>/url
-```
-
-```json
-{
-  "data": {
-    "url": "https://s3.amazonaws.com/...",
-    "contentType": "image/jpeg",
-    "originalName": "scum.jpg"
-  },
-  "message": "Scum photo URL issued.",
-  "meta": { "expiresInSeconds": 900 }
-}
-```
-
-The URL is issued only while at least one PMN record still lists that id in its
-`scum_photos`, and expires in 15 minutes. Once no record references it, the endpoint
-returns `404` `PMN_SCUM_PHOTO_NOT_FOUND` with **no `details`** — an unknown upload
-and a non-scum upload are deliberately indistinguishable. For any other file, use
-the authenticated `GET /api/uploads/:id/url`.
-
-### Read and create phosphate records
-
-```bash
-curl http://localhost:3001/api/phosphate-data
-```
-
-```json
-{
-  "data": [
-    {
-      "id": "b50a0722-0f82-489c-9b12-45825e07b949",
-      "lab_case_file_number": 1001,
-      "loc_id": "11111111-1111-1111-1111-111111111111",
-      "measurement_date": "2026-07-01T00:00:00.000Z",
-      "measurement_time": "1970-01-01T09:30:00.000Z",
-      "analysis_date": "2026-07-02T00:00:00.000Z",
-      "analyte_id": "PO4",
-      "analyte_level": 0.35,
-      "unit": "mg/L",
-      "notes": "Grab sample, north inlet.",
-      "photos": [],
-      "locations": {
-        "loc_id": "11111111-1111-1111-1111-111111111111",
-        "loc_name": "Lacamas Lake — North Inlet",
-        "latitude": 45.6,
-        "longitude": -122.4,
-        "description": "Inflow monitoring point."
-      }
-    }
-  ],
-  "message": "Retrieved phosphate data.",
-  "meta": { "count": 1 }
-}
-```
-
-On write, send a **flat `loc_id`** — the UUID of an existing `locations` row — and
-the server maps it to the underlying relation. Everything except `notes` and
-`photos` is required on POST.
-
-```bash
-curl -X POST http://localhost:3001/api/phosphate-data \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"loc_id":"<location-uuid>","lab_case_file_number":1001,
-       "measurement_date":"2026-07-01T00:00:00.000Z",
-       "measurement_time":"1970-01-01T09:30:00.000Z",
-       "analysis_date":"2026-07-02T00:00:00.000Z",
-       "analyte_id":"PO4","analyte_level":0.35,"unit":"mg/L","photos":[]}'
-```
-
-A missing `loc_id` is `400` `MISSING_FIELD`, a non-UUID one `400` `INVALID_ID`, and
-one that matches no row `400` `PHOSPHATE_LOCATION_UNKNOWN`. PATCH accepts the same
-flat `loc_id` to move a record to a different site.
-
-### Upload a file
-
-Three steps: ask for a presigned URL, PUT the bytes straight to S3, then confirm.
-The file never passes through this server.
-
-```bash
-# 1. Request URLs — up to 10 files per call
-UPLOAD_RESP=$(curl -s -X POST http://localhost:3001/api/uploads/presigned-urls \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"files":[{"filename":"photo.jpg","contentType":"image/jpeg","sizeBytes":204800}]}')
-```
-
-```json
-{
-  "data": [
-    {
-      "uploadId": "<uuid>",
-      "presignedUrl": "https://s3.amazonaws.com/...",
-      "objectKey": "uploads/<userId>/<uuid>.jpg"
-    }
-  ],
-  "message": "Upload URLs issued.",
-  "meta": { "count": 1, "expiresInSeconds": 300 }
-}
-```
-
-```bash
-# 2. PUT the raw bytes — no Authorization header, no multipart encoding.
-#    Content-Type must match what you declared.
+# 2. PUT the raw bytes to each presignedUrl: no Authorization header, no multipart,
+#    and the Content-Type must match what you declared
 curl -X PUT "<presignedUrl>" -H "Content-Type: image/jpeg" --data-binary @photo.jpg
 
-# 3. Confirm
-curl -X POST http://localhost:3001/api/uploads/confirm \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
+# 3. Confirm, then reference the uploadId in a record's photos or scum_photos
+curl -X POST https://api.lacamaswatershed.org/api/uploads/confirm \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"uploadIds":["<uploadId>"]}'
 ```
 
-```json
-{
-  "data": { "confirmed": 1 },
-  "message": "Confirmed 1 of 2 uploads.",
-  "meta": { "requested": 2, "confirmed": 1, "skipped": 1 }
-}
-```
-
-Constraints on step 1, each a `400` `INVALID_FIELD` (or `INVALID_ID` for a
-malformed upload id) with a `details` object carrying the allowed values:
-
-- `files` must be a non-empty array of at most **10** entries.
-- Allowed `contentType`: `image/jpeg`, `image/png`, `image/webp`, `image/gif`,
-  `application/pdf`. Only the `image/*` types are usable as PMN scum photos.
-- `sizeBytes` must be between 1 and **10,485,760** (10 MB). This is a *declared*
-  size the server validates; S3 does not enforce it, so a client can PUT a larger
-  object than it declared.
-- The `presignedUrl` expires in **5 minutes**.
-
-A confirm is a `200` even when some ids are skipped — see
-[Known gaps](#known-gaps--client-impact). Retrieval:
-
-```bash
-curl http://localhost:3001/api/uploads/<uploadId>/url -H "Authorization: Bearer $TOKEN"
-curl http://localhost:3001/api/uploads -H "Authorization: Bearer $TOKEN"
-```
-
-`GET /api/uploads/:id/url` returns `{ "url", "contentType", "originalName" }` with
-`meta.expiresInSeconds: 900`. The URL lasts 15 minutes and carries an `inline`
-content-disposition so browsers render it rather than downloading it. Unknown ids
-are `404` `UPLOAD_NOT_FOUND`; non-UUIDs are `400` `INVALID_ID`.
-
-`GET /api/uploads` lists only **your own confirmed** uploads, newest first, each as
-`{ id, user_id, original_name, object_key, content_type, size_bytes, status,
-created_at, updated_at }`.
-
-### Manage users
-
-```bash
-curl -X POST http://localhost:3001/api/users \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"email":"vol@example.com","password":"...","name":"Jane","role":"volunteer"}'
-```
-
-`role` defaults to `"volunteer"`; the only valid values are `"admin"` and
-`"volunteer"`. Users come back as
-`{ id, email, name, is_active, created_at, updated_at }` — password hashes are
-omitted at the query level and never appear in any response. A duplicate email is
-`409` `USER_EMAIL_TAKEN`, an unknown role `400` `USER_ROLE_UNKNOWN`, and an unknown
-id `404` `USER_NOT_FOUND`. `PATCH` accepts any of
-`{ email?, name?, password?, is_active? }`.
-
-## Errors
-
-Every error body has the same shape:
-
-```json
-{
-  "error": {
-    "message": "scum_photos must be an array of upload UUIDs",
-    "code": "PMN_SCUM_RULE_VIOLATION",
-    "details": { "field": "scum_photos", "expected": "array of upload UUIDs" },
-    "requestId": "a3f9c1e2-5b7d-4e01-9f2a-1c8e44b6d0a7"
-  }
-}
-```
-
-`details` appears only on `4xx` and carries client-safe context — field names,
-allowed values, what was received. On `5xx` it is always omitted and the message is
-deliberately generic; the full detail, including the underlying cause chain, goes to
-the server log under the same `requestId`.
-
-### Error codes
-
-Codes are **append-only**: once published, a code is never renamed and never reused
-for a different condition, so it is safe to switch on. The authoritative list is
-`src/http/error.codes.ts`.
-
-| Code | Status | Meaning |
-| --- | :---: | --- |
-| `ROUTE_NOT_FOUND` | 404 | No endpoint matches the method and path. |
-| `MALFORMED_JSON` | 400 | The request body is not valid JSON, or was truncated. |
-| `PAYLOAD_TOO_LARGE` | 413 | The request body exceeds the 1 MB limit. |
-| `UNSUPPORTED_MEDIA_TYPE` | 415 | The request body encoding is not supported. |
-| `RATE_LIMITED` | 429 | Rate limit exceeded; see the `RateLimit-*` headers. |
-| `INTERNAL_ERROR` | 500 | Unclassified server failure. |
-| `INVALID_ID` | 400 | A path parameter or id field is not a UUID. |
-| `MISSING_FIELD` | 400 | A required body field is absent. |
-| `INVALID_FIELD` | 400 | A body or query field has a bad type or value. |
-| `UNAUTHORIZED` | 401 | No credentials supplied, or the auth header is malformed. |
-| `TOKEN_INVALID` | 401 | The JWT is malformed or its signature does not verify. |
-| `TOKEN_EXPIRED` | 401 | The JWT is well-formed but past expiry — log in again. |
-| `FORBIDDEN` | 403 | Authenticated, but the role level is insufficient. |
-| `INVALID_CREDENTIALS` | 401 | Unknown email or wrong password (indistinguishable by design). |
-| `ACCOUNT_INACTIVE` | 403 | The account exists but `is_active` is false. |
-| `AUTH_LOGIN_FAILED` | 500 | Login failed for a server-side reason. |
-| `PMN_SCUM_RULE_VIOLATION` | 400 | A scum invariant was violated — see [Scum rules](#scum-rules). |
-| `PMN_RECORD_NOT_FOUND` | 404 | No PMN record with that id. |
-| `PMN_SCUM_PHOTO_NOT_FOUND` | 404 | The upload is not currently referenced as a scum photo, or does not exist. |
-| `PMN_READ_FAILED`, `PMN_CREATE_FAILED`, `PMN_UPDATE_FAILED`, `PMN_DELETE_FAILED`, `PMN_SCUM_LOOKUP_FAILED` | 500 | PMN operation failed server-side. |
-| `PHOSPHATE_RECORD_NOT_FOUND` | 404 | No phosphate record with that id. |
-| `PHOSPHATE_LOCATION_UNKNOWN` | 400 | No sampling location matches the `loc_id` supplied. |
-| `PHOSPHATE_READ_FAILED`, `PHOSPHATE_CREATE_FAILED`, `PHOSPHATE_UPDATE_FAILED`, `PHOSPHATE_DELETE_FAILED` | 500 | Phosphate operation failed server-side. |
-| `USER_NOT_FOUND` | 404 | No user with that id. |
-| `USER_EMAIL_TAKEN` | 409 | That email is already registered. |
-| `USER_ROLE_UNKNOWN` | 400 | The requested role is not configured on this server. |
-| `USERS_READ_FAILED`, `USERS_CREATE_FAILED`, `USERS_UPDATE_FAILED`, `USERS_DELETE_FAILED` | 500 | User operation failed server-side. |
-| `UPLOAD_NOT_FOUND` | 404 | No upload with that id. |
-| `UPLOADS_PRESIGN_FAILED`, `UPLOADS_CONFIRM_FAILED`, `UPLOADS_DOWNLOAD_URL_FAILED`, `UPLOADS_LIST_FAILED` | 500 | Upload operation failed server-side. |
-
-## Data dictionary
-
-The database spans four Postgres schemas — `pmn`, `camas`, `watershed_field_data`,
-and `users` — defined in `prisma/schema.prisma`. All primary keys are UUIDs. Two
-tables are served as data endpoints today.
-
-### `pmn_combined_field_data`
-
-The canonical merged PMN dataset: staff field data unioned with verified volunteer
-input. Served by `/api/pmn/combined-field-data`. Every column except `id` and
-`has_scum` is nullable.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | UUID (PK) | Always present; DB-generated. Do not send on POST. |
-| `sample_date` | date | When the sample was taken. |
-| `sample_time` | time | Time of day of the sample. |
-| `sampling_site` | string | Site name. |
-| `air_temperature` | decimal | Unit not recorded in the schema — confirm with LWC. |
-| `weather` | string | Free text. |
-| `wind_direction` | string | Free text, e.g. `"NW"`. |
-| `wind_speed` | string | Free text, e.g. `"5-10 mph"`. |
-| `barometeric_pressure` | decimal | Column name is misspelled in the DB; preserved as-is. |
-| `water_temperature` | decimal | Unit not recorded in the schema — confirm with LWC. |
-| `ph` | decimal | pH units. |
-| `dissolved_oxygen` | decimal | Unit not recorded in the schema — confirm with LWC. |
-| `conductivity` | decimal | Unit not recorded in the schema — confirm with LWC. |
-| `total_dissolved_solids` | decimal | Unit not recorded in the schema — confirm with LWC. |
-| `salt_ppt` | decimal | Salinity, parts per thousand. |
-| `aphanizomenon` | string | Cyanobacteria genus — free-text presence/abundance. |
-| `dolichospermum` | string | Cyanobacteria genus. |
-| `microcystis` | string | Cyanobacteria genus. |
-| `planktothrix` | string | Cyanobacteria genus. |
-| `raphidiopsis` | string | Cyanobacteria genus. |
-| `woronichinia` | string | Cyanobacteria genus. |
-| `secchi` | decimal | Secchi-disk depth (water clarity). Unit not recorded in the schema. |
-| `general_comments` | string | Free text. |
-| `photos` | string[] | Upload ids of general photos. Defaults to `[]`. Require an account to view. |
-| `has_scum` | boolean | Scum (toxic algae) observed. Not nullable; defaults to `false`; always `true` when `scum_photos` is non-empty. |
-| `scum_photos` | string[] | Upload ids of scum photos. Defaults to `[]`. Max 10, confirmed `image/*` only, disjoint from `photos`. **Publicly viewable.** |
-
-**Units are not stored anywhere in this dataset.** They follow the instruments LWC
-volunteers use; confirm them with LWC before publishing derived figures.
-
-### `watershed_field_data.phosphate_data`
-
-Lab phosphate results, served by `/api/phosphate-data` with the sampling site joined
-in under a nested `locations` key. Numeric columns here are `double precision`, so
-they serialize as JSON **numbers**; `notes` is the only nullable column.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | UUID (PK) | DB-generated. Do not send on POST. |
-| `lab_case_file_number` | int | Lab case/file number. |
-| `loc_id` | UUID (FK → `locations`) | Sampling site. Send as a **flat `loc_id`** on POST/PATCH. |
-| `measurement_date` | date | When the sample was taken. |
-| `measurement_time` | time | Time of day of the sample. |
-| `analysis_date` | date | When the lab ran the analysis. |
-| `analyte_id` | string(50) | Analyte code, e.g. `"PO4"`. |
-| `analyte_level` | float | Measured concentration, in `unit`. |
-| `unit` | string(50) | Unit for `analyte_level`, e.g. `"mg/L"`. |
-| `notes` | string \| null | Free text. The only nullable column. |
-| `photos` | string[] | Upload ids. Defaults to `[]`. |
-| `locations` | object | Nested joined site: `loc_id`, `loc_name`, `latitude`, `longitude`, `description`. Read-only on responses. |
-
-### Tables without endpoints
-
-<details>
-<summary><code>camas_city_data</code> — Camas city water readings (schema: <code>camas</code>)</summary>
-
-UUID PK `id`. Columns: `location`, `date`, `time`, `depth`, `temp_c`, `do_percent`,
-`do_mg_l`, `spc_us_cm`, `c_us_cm`, `tds_mg_l`, `ph`, `chl_a_rfu`, `phyc_rfu`,
-`turbidity` — all decimal except `location`, `date`, and `time`. Modeled in Prisma,
-not served.
-</details>
-
-<details>
-<summary><code>watershed_field_data.locations</code> — sampling sites</summary>
-
-`loc_id` (UUID PK), `loc_name`, `latitude`, `longitude` (floats), `description`.
-One-to-many with `phosphate_data`. Not served on its own — rows are reachable only
-as the nested `locations` object on `GET /api/phosphate-data`. Seed them with
-`npm run seed:locations`.
-</details>
-
-<details>
-<summary><code>users</code> schema — RBAC and uploads</summary>
-
-- `users` — `id`, `email` (unique), `password_hash`, `name`, `is_active`,
-  `created_at`, `updated_at`.
-- `roles` — `id`, `name` (unique), `description`. Seeded with `admin`, `volunteer`,
-  `guest`, though only the first two are assignable through the API.
-- `permissions` — `id`, `name` (unique), `description`. Seeded with `data:read`,
-  `data:write`, `data:update`, `data:delete`, `users:manage`.
-- `user_roles`, `role_permissions` — join tables with composite PKs and cascading
-  FKs.
-- `upload` — `id`, `user_id` (FK, cascade delete), `original_name`, `object_key`
-  (unique S3 key, `uploads/<userId>/<uuid>.<ext>`), `content_type`, `size_bytes`,
-  `status` (`"pending"` | `"confirmed"`), `created_at`, `updated_at`.
-</details>
-
-## Middleware chain
-
-The order each request passes through, which explains most surprising responses:
-
-```
-requestId      → helmet → cors
- → GET /health   public, unauthenticated, never rate-limited; the one un-enveloped body
- → express.json  1 MB limit
- → /auth/login   public, 10 req / 15 min
- → /api          rateLimiter → optional JWT → feature routers (requireRole per route)
- → notFoundHandler → errorHandler
-```
+A confirm returns `200` even when some ids are skipped, so compare `meta.confirmed`
+with `meta.requested`. The declared `sizeBytes` is checked by this server but not by
+S3. Only `image/*` uploads can be used as PMN scum photos; the scum rules are in the
+`PmnInput` schema in the docs.
 
 ## Known gaps & client impact
 
 | Gap | Effect | What to do about it |
 | --- | --- | --- |
-| No pagination or sorting on either data endpoint | `GET` returns the entire table on every call; payload size grows without bound as data accumulates | Fetch once, then sort and page locally. Cache aggressively. |
-| `hasScum` is the only filter | Every other view (by site, by date range, by genus) must be computed client-side | Filter the full result set locally. |
-| `meta` never carries pagination | There is no cursor or total-pages hint to read | Do not write code that probes for `meta.pagination`. |
-| No role-reassignment endpoint | A user's role is fixed at `POST /api/users`; changing it needs direct DB access | Do not build role-editing UI. Offer account creation only. |
-| Partial upload confirms return `200` | Unknown ids, already-confirmed ids, and other users' ids are silently skipped, not rejected | Compare `meta.confirmed` against `meta.requested`; never treat `200` as "all confirmed". |
-| `camas_city_data` and standalone `locations` have no endpoints | A sampling-site picker cannot be populated from the API, and Camas readings are unreachable | Harvest `loc_id` values from `GET /api/phosphate-data`, or seed and query them out of band. |
-| Login is capped at 10 attempts / 15 min per IP, hardcoded | Repeated failed logins — or several people behind one NAT — will start returning `429` | Surface `RATE_LIMITED` distinctly in the login UI and honor `RateLimit-Reset`. |
-| `GET /api/uploads/:id/url` has no ownership check (intentional) | Any volunteer can fetch any upload's URL | Do not treat an upload id as a secret or as an access-control boundary. |
-| No upload-deletion endpoint, and `pending` uploads are never cleaned up | A user cannot remove a photo once uploaded | Omit delete affordances for uploads; expect orphaned S3 objects. |
-| `permissions` / `role_permissions` are seeded but never read | Authorization uses only the role names in the JWT | Build against the three role levels, not against a permissions model the API ignores. |
-| Rate limiting is in-memory | Limits are per-instance, so counts reset on restart and diverge across instances | Treat `429` as advisory, not deterministic. A multi-instance deploy needs a shared store such as Redis. |
-| Logging is `console.error` + JSON | No log levels or transport; correlation is by `requestId` only | Always capture and report `error.requestId` when escalating a `500`. |
-| The RDS server certificate is not verified | Connections are encrypted but not authenticated (production only; local Docker runs without SSL) | Server-side concern; no client action. |
-| No automated tests | `package.json` has a `"test": "test"` placeholder and `scripts/` holds only `deploy.sh` | Verify changes manually with the curl examples above. |
-| No record history or versioning | The API always serves current state; corrections overwrite silently | Record the download date alongside any published analysis. |
+| No pagination or sorting | `GET` returns the whole table on every call | Fetch once, then sort, filter and page locally. Cache aggressively. |
+| `hasScum` is the only filter | Views by site, date range or genus must be computed client-side | Filter the full result set locally. |
+| No role-reassignment endpoint | A user's role is fixed at creation | Don't build role-editing UI. |
+| Partial upload confirms return `200` | Unknown, already-confirmed and other users' ids are skipped silently | Compare `meta.confirmed` with `meta.requested`. |
+| No `locations` or `camas_city_data` endpoints | A site picker can't be populated directly | Collect `loc_id` values from `GET /api/phosphate-data`. |
+| Login is capped at 10 attempts / 15 min per IP | Several people behind one NAT can hit `429` | Show `RATE_LIMITED` distinctly and honor `RateLimit-Reset`. |
+| `GET /api/uploads/{id}/url` has no ownership check (intentional) | Any volunteer can fetch any upload | Don't treat an upload id as a secret. |
+| No upload deletion; `pending` uploads are never cleaned up | A photo can't be removed once uploaded | Omit delete affordances for uploads. |
+| Rate limiting is in-memory | Counts reset when the server restarts | Treat `429` as advisory, not exact. |
+| No record history | Corrections overwrite silently | Record the download date with any published analysis. |
 
 ---
 

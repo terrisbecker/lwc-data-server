@@ -74,7 +74,7 @@ export async function getUser(id: string): Promise<SafeUser> {
 export async function createNewUser(body: {
   email: string;
   password: string;
-  name?: string;
+  name?: string | null;
   role?: string;
 }): Promise<SafeUser> {
   try {
@@ -107,10 +107,10 @@ export async function createNewUser(body: {
 
 export async function patchUser(
   id: string,
-  body: { email?: string; password?: string; name?: string; is_active?: boolean },
+  body: { email?: string; password?: string; name?: string | null; is_active?: boolean },
 ): Promise<SafeUser> {
   try {
-    const data: { email?: string; password_hash?: string; name?: string; is_active?: boolean } = {};
+    const data: { email?: string; password_hash?: string; name?: string | null; is_active?: boolean } = {};
     if (body.email !== undefined) data.email = body.email;
     if (body.name !== undefined) data.name = body.name;
     if (body.is_active !== undefined) data.is_active = body.is_active;

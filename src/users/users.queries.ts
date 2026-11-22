@@ -23,7 +23,7 @@ export async function getUserById(id: string): Promise<SafeUser | null> {
 export async function createUser(data: {
   email: string;
   password_hash: string;
-  name?: string;
+  name?: string | null;
   roleId: string;
 }): Promise<SafeUser> {
   return prisma.users.create({
@@ -44,7 +44,7 @@ export async function updateUser(
   data: {
     email?: string;
     password_hash?: string;
-    name?: string;
+    name?: string | null;
     is_active?: boolean;
   },
 ): Promise<SafeUser | null> {
