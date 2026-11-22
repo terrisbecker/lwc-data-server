@@ -397,7 +397,7 @@ export interface components {
          * @example 8.8
          */
         Decimal: string | null;
-        /** @description A number, or a numeric string to keep precision. */
+        /** @description A number, or a numeric string such as `"7.40"` to keep precision. */
         DecimalInput: number | string | null;
         /** Format: date-time */
         DateTime: string;
@@ -406,7 +406,10 @@ export interface components {
          * @description DATE columns: `2026-05-01T00:00:00.000Z`. TIME columns: `1970-01-01T08:30:00.000Z`.
          */
         NullableDateTime: string | null;
-        /** @description ISO-8601 date-time string, for example `2026-05-01T00:00:00.000Z` (or `1970-01-01T08:30:00.000Z` for a time). */
+        /**
+         * Format: date-time
+         * @description ISO-8601 date-time string, for example `2026-05-01T00:00:00.000Z` (or `1970-01-01T08:30:00.000Z` for a time).
+         */
         DateInput: string | null;
         NullableText: string | null;
         /** @description Upload ids. */
@@ -572,11 +575,20 @@ export interface components {
              * @description Sampling location. Sent flat, not nested.
              */
             loc_id: string;
-            /** @description ISO-8601 date-time string. */
+            /**
+             * Format: date-time
+             * @description ISO-8601 date-time string.
+             */
             measurement_date: string;
-            /** @description ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`. */
+            /**
+             * Format: date-time
+             * @description ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`.
+             */
             measurement_time: string;
-            /** @description ISO-8601 date-time string. */
+            /**
+             * Format: date-time
+             * @description ISO-8601 date-time string.
+             */
             analysis_date: string;
             analyte_id: string;
             analyte_level: number;
@@ -592,11 +604,20 @@ export interface components {
              * @description Sampling location. Sent flat, not nested.
              */
             loc_id?: string;
-            /** @description ISO-8601 date-time string. */
+            /**
+             * Format: date-time
+             * @description ISO-8601 date-time string.
+             */
             measurement_date?: string;
-            /** @description ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`. */
+            /**
+             * Format: date-time
+             * @description ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`.
+             */
             measurement_time?: string;
-            /** @description ISO-8601 date-time string. */
+            /**
+             * Format: date-time
+             * @description ISO-8601 date-time string.
+             */
             analysis_date?: string;
             analyte_id?: string;
             analyte_level?: number;

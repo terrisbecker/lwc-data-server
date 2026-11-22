@@ -829,7 +829,10 @@ components:
       examples: ["8.8"]
     DecimalInput:
       type: [number, string, "null"]
-      description: A number, or a numeric string to keep precision.
+      description: A number, or a numeric string such as `"7.40"` to keep precision.
+      # `pattern` applies only to the string branch; without it a non-numeric
+      # string reached Prisma and came back as a 500.
+      pattern: "^-?\\d+(\\.\\d+)?$"
     DateTime:
       type: string
       format: date-time
@@ -839,6 +842,7 @@ components:
       description: "DATE columns: `2026-05-01T00:00:00.000Z`. TIME columns: `1970-01-01T08:30:00.000Z`."
     DateInput:
       type: [string, "null"]
+      format: date-time
       description: ISO-8601 date-time string, for example `2026-05-01T00:00:00.000Z` (or `1970-01-01T08:30:00.000Z` for a time).
     NullableText:
       type: [string, "null"]
@@ -1050,9 +1054,9 @@ components:
       properties:
         lab_case_file_number: { type: integer }
         loc_id: { type: string, format: uuid, description: "Sampling location. Sent flat, not nested." }
-        measurement_date: { type: string, description: ISO-8601 date-time string. }
-        measurement_time: { type: string, description: "ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`." }
-        analysis_date: { type: string, description: ISO-8601 date-time string. }
+        measurement_date: { type: string, format: date-time, description: ISO-8601 date-time string. }
+        measurement_time: { type: string, format: date-time, description: "ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`." }
+        analysis_date: { type: string, format: date-time, description: ISO-8601 date-time string. }
         analyte_id: { type: string, maxLength: 50 }
         analyte_level: { type: number }
         unit: { type: string, maxLength: 50 }
@@ -1065,9 +1069,9 @@ components:
       properties:
         lab_case_file_number: { type: integer }
         loc_id: { type: string, format: uuid, description: "Sampling location. Sent flat, not nested." }
-        measurement_date: { type: string, description: ISO-8601 date-time string. }
-        measurement_time: { type: string, description: "ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`." }
-        analysis_date: { type: string, description: ISO-8601 date-time string. }
+        measurement_date: { type: string, format: date-time, description: ISO-8601 date-time string. }
+        measurement_time: { type: string, format: date-time, description: "ISO-8601 date-time string, for example `1970-01-01T10:20:00.000Z`." }
+        analysis_date: { type: string, format: date-time, description: ISO-8601 date-time string. }
         analyte_id: { type: string, maxLength: 50 }
         analyte_level: { type: number }
         unit: { type: string, maxLength: 50 }
@@ -1178,8 +1182,8 @@ components:
       type: object
       additionalProperties: false
       properties:
-        email: { type: string }
-        password: { type: string }
+        email: { type: string, minLength: 1 }
+        password: { type: string, minLength: 1 }
         name: { $ref: "#/components/schemas/NullableText" }
         is_active: { type: boolean }
     UserResponse:
