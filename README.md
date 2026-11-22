@@ -246,7 +246,7 @@ through the usual fork/branch -> pull request against `main`. Please contact ter
   PostgreSQL/RDS instance.
 - An S3 bucket and AWS credentials. `AWS_REGION` and `S3_BUCKET_NAME` are read at
   startup and the server **refuses to start without them**, even if you never touch
-  an upload endpoint. See [S3 access](#s3-access) below.
+  an upload endpoint.
 
 ## Running locally
 
